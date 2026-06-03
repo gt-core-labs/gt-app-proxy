@@ -19,7 +19,7 @@ services:
     command:
       - |
         cd /var/lib/dolt
-        dolt sql -q "CREATE USER IF NOT EXISTS 'gastown'@'%'; GRANT ALL PRIVILEGES ON *.* TO 'gastown'@'%' WITH GRANT OPTION;"
+        dolt sql -q "CREATE USER IF NOT EXISTS '${DOLT_USER:-gtapp}'@'%'; GRANT ALL PRIVILEGES ON *.* TO '${DOLT_USER:-gtapp}'@'%' WITH GRANT OPTION;"
         exec dolt sql-server --host=0.0.0.0 --port=3307
     volumes:
       - dolt-data:/var/lib/dolt
@@ -35,9 +35,9 @@ services:
     container_name: gt-app-pg
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-gastown}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gastown}
-      POSTGRES_DB: ${POSTGRES_DB:-gastown}
+      POSTGRES_USER: ${POSTGRES_USER:-gtapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gtapp}
+      POSTGRES_DB: ${POSTGRES_DB:-gtapp}
     volumes:
       - gt-pgdata:/var/lib/postgresql/data
     expose:
@@ -59,12 +59,12 @@ services:
       - postgres
     environment:
       GT_MCP_HTTP_BIND: 0.0.0.0:8765
-      GT_DOLT_URL: mysql://${POSTGRES_USER:-gastown}@dolt:3307/hq
+      GT_DOLT_URL: mysql://${DOLT_USER:-gtapp}@dolt:3307/hq
       # Durable audit — every tool dispatch lands in mcp_audit.
-      GT_PG_AUDIT_URL: postgres://${POSTGRES_USER:-gastown}:${POSTGRES_PASSWORD:-gastown}@postgres:5432/${POSTGRES_DB:-gastown}
+      GT_PG_AUDIT_URL: postgres://${POSTGRES_USER:-gtapp}:${POSTGRES_PASSWORD:-gtapp}@postgres:5432/${POSTGRES_DB:-gtapp}
       # Domain dispatch: table domains on PG, event-sourced domains under the
       # event-log root. Unset GT_PG_URL ⇒ server serves issues + meta only.
-      GT_PG_URL: postgres://${POSTGRES_USER:-gastown}:${POSTGRES_PASSWORD:-gastown}@postgres:5432/${POSTGRES_DB:-gastown}
+      GT_PG_URL: postgres://${POSTGRES_USER:-gtapp}:${POSTGRES_PASSWORD:-gtapp}@postgres:5432/${POSTGRES_DB:-gtapp}
       GT_EVENTLOG_ROOT: /var/lib/gt-core
       GT_MCP_ACTOR: ${GT_MCP_ACTOR:-mcp-local}
       GT_MCP_SCOPE_CONFIG: /etc/gt-core/mcp-scope.toml
