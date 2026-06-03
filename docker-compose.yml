@@ -1,0 +1,86 @@
+# gt-app — deploy stack for the gt-core MCP server.
+#
+# Three services: Dolt (issues/meta tracking), Postgres (durable audit + the
+# event-sourced dispatch domains), and gt-mcp-server (the gt-core MCP surface,
+# pulled from DockerHub — built+pushed by gt-core's docker-publish workflow).
+#
+# Quick start:
+#   cp .env.example .env   # then edit secrets
+#   docker compose up -d
+#   curl -s http://127.0.0.1:8765/healthz
+services:
+  # Dolt: canonical tracking DB (hq.issues + meta). MySQL wire, passwordless,
+  # superuser ensured idempotently on each boot (ships only root@localhost).
+  dolt:
+    image: dolthub/dolt-sql-server:latest
+    container_name: gt-app-dolt
+    restart: unless-stopped
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        cd /var/lib/dolt
+        dolt sql -q "CREATE USER IF NOT EXISTS 'gastown'@'%'; GRANT ALL PRIVILEGES ON *.* TO 'gastown'@'%' WITH GRANT OPTION;"
+        exec dolt sql-server --host=0.0.0.0 --port=3307
+    volumes:
+      - dolt-data:/var/lib/dolt
+    expose:
+      - "3307"
+    networks:
+      - default
+
+  # Postgres: durable MCP audit (mcp_audit) + the table-backed dispatch domains
+  # (workspace.*, rig.*). Internal-only.
+  postgres:
+    image: postgres:16-alpine
+    container_name: gt-app-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gastown}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gastown}
+      POSTGRES_DB: ${POSTGRES_DB:-gastown}
+    volumes:
+      - gt-pgdata:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    networks:
+      - default
+
+  # gt-mcp-server: the gt-core MCP server (rmcp streamable-HTTP). Serves issues.*
+  # + gt://issues from Dolt `hq`, plus the domain dispatch namespaces (agent,
+  # convoy, graph, merge, quota, rig, workspace) over PG + the event log.
+  # Published on 127.0.0.1:8765 for host MCP clients (gt-mcp-cli / Claude Code).
+  gt-mcp-server:
+    image: codecsrayo/gt-core-mcp-server:latest
+    pull_policy: always
+    container_name: gt-app-mcp-server
+    restart: unless-stopped
+    depends_on:
+      - dolt
+      - postgres
+    environment:
+      GT_MCP_HTTP_BIND: 0.0.0.0:8765
+      GT_DOLT_URL: mysql://${POSTGRES_USER:-gastown}@dolt:3307/hq
+      # Durable audit — every tool dispatch lands in mcp_audit.
+      GT_PG_AUDIT_URL: postgres://${POSTGRES_USER:-gastown}:${POSTGRES_PASSWORD:-gastown}@postgres:5432/${POSTGRES_DB:-gastown}
+      # Domain dispatch: table domains on PG, event-sourced domains under the
+      # event-log root. Unset GT_PG_URL ⇒ server serves issues + meta only.
+      GT_PG_URL: postgres://${POSTGRES_USER:-gastown}:${POSTGRES_PASSWORD:-gastown}@postgres:5432/${POSTGRES_DB:-gastown}
+      GT_EVENTLOG_ROOT: /var/lib/gt-core
+      GT_MCP_ACTOR: ${GT_MCP_ACTOR:-mcp-local}
+      GT_MCP_SCOPE_CONFIG: /etc/gt-core/mcp-scope.toml
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./mcp-scope.toml:/etc/gt-core/mcp-scope.toml:ro
+      - gt-eventlog:/var/lib/gt-core
+    ports:
+      - "127.0.0.1:${GT_MCP_PORT:-8765}:8765"
+    networks:
+      - default
+
+volumes:
+  dolt-data:
+  gt-pgdata:
+  gt-eventlog:
+
+networks:
+  default:
