@@ -131,10 +131,12 @@ services:
       GT_PG_URL: postgres://${POSTGRES_USER:-gtapp}:${POSTGRES_PASSWORD:-gtapp}@postgres:5432/${POSTGRES_DB:-gtapp}
       GT_EVENTLOG_ROOT: /var/lib/gt-core
       GT_MCP_ACTOR: ${GT_MCP_ACTOR:-mcp-local}
-      GT_MCP_SCOPE_CONFIG: /etc/gt-core/mcp-scope.toml
+      # RBAC policy: pick a built-in scope profile shipped in core (dev|readonly|closed).
+      # For a bespoke policy, drop GT_MCP_SCOPE_PROFILE and mount a file at GT_MCP_SCOPE_CONFIG
+      # instead (it takes precedence).
+      GT_MCP_SCOPE_PROFILE: ${GT_MCP_SCOPE_PROFILE:-dev}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
-      - ./mcp-scope.toml:/etc/gt-core/mcp-scope.toml:ro
       - gt-eventlog:/var/lib/gt-core
     ports:
       - "127.0.0.1:${GT_MCP_PORT:-8765}:8765"
