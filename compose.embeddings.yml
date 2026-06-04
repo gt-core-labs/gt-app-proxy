@@ -10,6 +10,5 @@
 services:
   gt-mcp-server:
     image: codecsrayo/gt-core-mcp-server:embeddings
-    pull_policy: never
     environment:
       GT_EMBEDDINGS: "1"
