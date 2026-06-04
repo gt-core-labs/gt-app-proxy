@@ -35,7 +35,9 @@ services:
   # Postgres: durable MCP audit (mcp_audit) + the table-backed dispatch domains
   # (workspace.*, rig.*). Internal-only.
   postgres:
-    image: postgres:16-alpine
+    # pgvector image: the document subsystem's semantic search (hq-docs-search.2, docs/11)
+    # needs the `vector` extension (migration 0003 runs CREATE EXTENSION vector).
+    image: pgvector/pgvector:pg16
     container_name: gt-app-pg
     restart: unless-stopped
     environment:
@@ -46,6 +48,52 @@ services:
       - gt-pgdata:/var/lib/postgresql/data
     expose:
       - "5432"
+    networks:
+      - default
+
+  # MinIO: S3-compatible object store holding the BYTES of binary document
+  # attachments (PDF/image/Office) the document subsystem tracks (gt-store-blob,
+  # hq-docs-store.2 / docs/11). The Postgres `documents` row keeps only the
+  # bucket/key pointer + extracted text; `.md` content lives in Postgres, never here.
+  # Internal API on :9000; the operator console is published to localhost on :9001.
+  minio:
+    image: minio/minio:latest
+    container_name: gt-app-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-gtapp}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-gtappsecret}
+    volumes:
+      - minio-data:/data
+    expose:
+      - "9000"
+    ports:
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+  # One-shot: create the documents bucket on first boot (idempotent). Exits 0 once
+  # the bucket exists, so the stack does not depend on its long-running presence.
+  minio-createbucket:
+    image: minio/mc:latest
+    container_name: gt-app-minio-init
+    depends_on:
+      - minio
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "${MINIO_ROOT_USER:-gtapp}" "${MINIO_ROOT_PASSWORD:-gtappsecret}"; do
+          echo "waiting for minio..."; sleep 2;
+        done
+        mc mb --ignore-existing "local/${GT_BLOB_BUCKET:-gt-documents}"
+        echo "bucket ready: ${GT_BLOB_BUCKET:-gt-documents}"
     networks:
       - default
 
@@ -61,9 +109,17 @@ services:
     depends_on:
       - dolt
       - postgres
+      - minio
     environment:
       GT_MCP_HTTP_BIND: 0.0.0.0:8765
       GT_DOLT_URL: mysql://${DOLT_USER:-gtapp}@dolt:3307/hq
+      # Object store for binary document attachments (gt-store-blob, docs/11). The
+      # server builds an S3 client against MinIO from these; .md content stays in PG.
+      GT_BLOB_ENDPOINT: http://minio:9000
+      GT_BLOB_BUCKET: ${GT_BLOB_BUCKET:-gt-documents}
+      GT_BLOB_REGION: ${GT_BLOB_REGION:-us-east-1}
+      GT_BLOB_ACCESS_KEY: ${MINIO_ROOT_USER:-gtapp}
+      GT_BLOB_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-gtappsecret}
       # Durable audit — every tool dispatch lands in mcp_audit.
       GT_PG_AUDIT_URL: postgres://${POSTGRES_USER:-gtapp}:${POSTGRES_PASSWORD:-gtapp}@postgres:5432/${POSTGRES_DB:-gtapp}
       # Domain dispatch: table domains on PG, event-sourced domains under the
@@ -85,6 +141,7 @@ volumes:
   dolt-data:
   gt-pgdata:
   gt-eventlog:
+  minio-data:
 
 networks:
   default:
