@@ -1,0 +1,15 @@
+# Embeddings overlay (hq-docs-search.2, docs/11).
+#
+# Opt-in semantic/hybrid document search: swaps gt-mcp-server to the heavier
+# `:embeddings` image (built WITH --features embeddings-fastembed) and turns it on
+# with GT_EMBEDDINGS=1. The fastembed model caches under /var/lib/gt-core/fastembed,
+# which lives on the existing gt-eventlog volume, so it persists across restarts and
+# is downloaded only once.
+#
+# Use:  docker compose -f docker-compose.yml -f compose.embeddings.yml up -d
+services:
+  gt-mcp-server:
+    image: codecsrayo/gt-core-mcp-server:embeddings
+    pull_policy: never
+    environment:
+      GT_EMBEDDINGS: "1"
