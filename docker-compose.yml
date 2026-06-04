@@ -83,8 +83,11 @@ services:
   minio-createbucket:
     image: minio/mc:latest
     container_name: gt-app-minio-init
+    # Wait for MinIO's healthcheck before the first `mc` call, so boot logs don't show a
+    # transient "connection refused" (the entrypoint retry loop already tolerates it).
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     entrypoint:
       - sh
       - -c
