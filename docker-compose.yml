@@ -17,16 +17,15 @@ services:
     restart: unless-stopped
     entrypoint: ["sh", "-c"]
     command:
+      # No schema seed here: gt-mcp-server owns the bootstrap (DoltIssues::ensure_database +
+      # ensure_schema create the `hq` database + `issues` base table on connect). This only
+      # ensures the wire user + starts the server.
       - |
         cd /var/lib/dolt
-        dolt sql < /docker-entrypoint-initdb.d/dolt-init.sql
         dolt sql -q "CREATE USER IF NOT EXISTS '${DOLT_USER:-gtapp}'@'%'; GRANT ALL PRIVILEGES ON *.* TO '${DOLT_USER:-gtapp}'@'%' WITH GRANT OPTION;"
         exec dolt sql-server --host=0.0.0.0 --port=3307
     volumes:
       - dolt-data:/var/lib/dolt
-      # Boot seed: creates the `hq` database + the `bd`-owned `issues` base table
-      # that gt-mcp-server's ensure_schema layers taxonomy columns onto.
-      - ./dolt-init.sql:/docker-entrypoint-initdb.d/dolt-init.sql:ro
     expose:
       - "3307"
     networks:
