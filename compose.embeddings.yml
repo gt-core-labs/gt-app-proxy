@@ -10,5 +10,8 @@
 services:
   gt-mcp-server:
     image: codecsrayo/gt-core-mcp-server:embeddings
+    # Built locally on the host (not pushed to DockerHub), so never try to pull — use the local
+    # image. Overrides the base service's `pull_policy: always` (which targets :latest).
+    pull_policy: never
     environment:
       GT_EMBEDDINGS: "1"

@@ -135,13 +135,50 @@ services:
       # For a bespoke policy, drop GT_MCP_SCOPE_PROFILE and mount a file at GT_MCP_SCOPE_CONFIG
       # instead (it takes precedence).
       GT_MCP_SCOPE_PROFILE: ${GT_MCP_SCOPE_PROFILE:-dev}
+      # Public reverse-proxy (gt-app-proxy): the /mcp transport's DNS-rebinding guard only
+      # accepts loopback by default, so the served domain's Host must be allow-listed or every
+      # proxied /mcp call is rejected. Appended to the loopback defaults by the binary.
+      GT_MCP_ALLOWED_HOSTS: ${GT_MCP_ALLOWED_HOSTS:-gt.codecsrayo.com,gt.codecsrayo.com:443}
+      # RS256 login surface (hq-web-extras.7): the minter signs access JWTs with the private key;
+      # the verifier + /auth/jwks publish the public key. The signing kid must be present in the
+      # verifier keyset (GT_JWT_RS256_KEYS = kid=<pub-pem>), so tokens verify against their kid.
+      GT_JWT_RS256_PRIVATE_KEY_FILE: /run/secrets/jwt_private.pem
+      GT_JWT_RS256_SIGNING_KID: ${GT_JWT_RS256_SIGNING_KID:-gt-main}
+      GT_JWT_RS256_KEYS: ${GT_JWT_RS256_SIGNING_KID:-gt-main}=/run/secrets/jwt_public.pem
+      # Access/refresh token lifetimes (epic hq-web-extras contract).
+      GT_AUTH_ACCESS_TTL_SECS: ${GT_AUTH_ACCESS_TTL_SECS:-900}
+      GT_AUTH_REFRESH_TTL_SECS: ${GT_AUTH_REFRESH_TTL_SECS:-2592000}
+      # Admin seed (argon2 upsert into ws_default.users, scopes ["*"]). No insecure default:
+      # set BOTH in .env or the binary skips the seed (logs a line).
+      GT_ADMIN_EMAIL: ${GT_ADMIN_EMAIL:-}
+      GT_ADMIN_PASSWORD: ${GT_ADMIN_PASSWORD:-}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - gt-eventlog:/var/lib/gt-core
+      # RS256 keys mounted read-only from the gitignored secrets/ dir on the host.
+      - ./secrets/jwt_private.pem:/run/secrets/jwt_private.pem:ro
+      - ./secrets/jwt_public.pem:/run/secrets/jwt_public.pem:ro
     ports:
+      # Loopback publish kept for host MCP clients (gt-mcp-cli / Claude Code) bypassing the proxy.
       - "127.0.0.1:${GT_MCP_PORT:-8765}:8765"
     networks:
+      # `default` reaches dolt/postgres/minio; `proyectos-bi-quare` is Traefik's provider network.
       - default
+      - proyectos-bi-quare
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proyectos-bi-quare
+      # HTTP → HTTPS redirect.
+      - traefik.http.routers.gt-http.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`)
+      - traefik.http.routers.gt-http.entrypoints=web
+      - traefik.http.routers.gt-http.middlewares=gt-https
+      - traefik.http.middlewares.gt-https.redirectscheme.scheme=https
+      # HTTPS: whole backend (/, /auth/*, /api/v1/*, /mcp, /stream, /health) → :8765, ACME via netlify.
+      - traefik.http.routers.gt.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`)
+      - traefik.http.routers.gt.entrypoints=websecure
+      - traefik.http.routers.gt.tls=true
+      - traefik.http.routers.gt.tls.certresolver=netlify
+      - traefik.http.services.gt.loadbalancer.server.port=8765
 
 volumes:
   dolt-data:
@@ -151,3 +188,7 @@ volumes:
 
 networks:
   default:
+  # Traefik's shared provider network (created by the plane proxy stack). External so the
+  # proxy reaches this backend without this compose owning its lifecycle.
+  proyectos-bi-quare:
+    external: true
