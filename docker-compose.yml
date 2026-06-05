@@ -210,7 +210,9 @@ services:
       # HTTPS: backend API surfaces only (/auth, /api, /mcp, /stream, /openapi.json,
       # /health*, /.well-known) → :8765. Everything else (`/`, /login, /tracker, ...)
       # falls through to gt-web (catch-all router below, lower priority). ACME via netlify.
-      - traefik.http.routers.gt.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`) && (PathPrefix(`/auth`) || PathPrefix(`/api`) || PathPrefix(`/mcp`) || PathPrefix(`/stream`) || PathPrefix(`/openapi.json`) || PathPrefix(`/healthz`) || PathPrefix(`/health`) || PathPrefix(`/.well-known`) || PathPrefix(`/share`))
+      # NOTE: /share is NOT routed here — gt-docs (priority 50 below) owns the PUBLIC HTML
+      # viewer and calls the backend's GET /share/{hash} JSON server-side over GT_BACKEND_URL.
+      - traefik.http.routers.gt.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`) && (PathPrefix(`/auth`) || PathPrefix(`/api`) || PathPrefix(`/mcp`) || PathPrefix(`/stream`) || PathPrefix(`/openapi.json`) || PathPrefix(`/healthz`) || PathPrefix(`/health`) || PathPrefix(`/.well-known`))
       - traefik.http.routers.gt.priority=100
       - traefik.http.routers.gt.entrypoints=websecure
       - traefik.http.routers.gt.tls=true
@@ -254,6 +256,48 @@ services:
       - traefik.http.services.gtweb.loadbalancer.server.port=3000
       # Watchtower watches ONLY this container (scope below); auto-pulls
       # codecsrayo/gt-web:latest when the digest changes and recreates it.
+      - com.centurylinklabs.watchtower.scope=gt-web
+
+  # gt-docs: Astro SSR documentation app (adapter-node), same-origin behind this
+  # Traefik. Owns /docs (specs from git + workspace documents) and the PUBLIC
+  # /share/:hash viewer. Its SSR reaches the backend directly over the compose
+  # network (GT_BACKEND_URL) — including the backend's GET /share/{hash} JSON,
+  # which is no longer routed publicly (dropped from the `gt` router rule above).
+  # Image published to DockerHub by gt-docs's docker-publish workflow.
+  gt-docs:
+    image: codecsrayo/gt-docs:latest
+    # First deploy uses a LOCALLY built image (the DockerHub PAT secret is not yet
+    # set on the gt-docs repo, so CI cannot publish). Flip to `always` once the
+    # token lands and :latest is on the hub — watchtower (scope gt-web) then
+    # auto-updates it like gt-web.
+    pull_policy: never
+    container_name: gt-app-docs
+    restart: unless-stopped
+    depends_on:
+      - gt-mcp-server
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: 0.0.0.0
+      # SSR → backend directly over the compose network (bypasses Traefik).
+      GT_BACKEND_URL: http://gt-mcp-server:8765
+      ORIGIN: https://${GT_DOMAIN:-gt.codecsrayo.com}
+    networks:
+      - default
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proyectos-bi-quare
+      # /docs + /share → gt-docs. Priority 50: ABOVE gt-web's catch-all (1), BELOW
+      # the backend API rules (100), so /api etc. still win.
+      - traefik.http.routers.gtdocs.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`) && (PathPrefix(`/docs`) || PathPrefix(`/share`))
+      - traefik.http.routers.gtdocs.priority=50
+      - traefik.http.routers.gtdocs.entrypoints=websecure
+      - traefik.http.routers.gtdocs.tls=true
+      - traefik.http.routers.gtdocs.tls.certresolver=netlify
+      - traefik.http.services.gtdocs.loadbalancer.server.port=3000
+      # Reuse gt-web's watchtower scope so the existing watchtower auto-updates it
+      # once the image is published to DockerHub (and pull_policy flips to always).
       - com.centurylinklabs.watchtower.scope=gt-web
 
   # Watchtower: auto-deploy for gt-web. Polls DockerHub and, on a new :latest
