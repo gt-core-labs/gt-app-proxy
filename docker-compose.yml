@@ -210,7 +210,7 @@ services:
       # HTTPS: backend API surfaces only (/auth, /api, /mcp, /stream, /openapi.json,
       # /health*, /.well-known) → :8765. Everything else (`/`, /login, /tracker, ...)
       # falls through to gt-web (catch-all router below, lower priority). ACME via netlify.
-      - traefik.http.routers.gt.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`) && (PathPrefix(`/auth`) || PathPrefix(`/api`) || PathPrefix(`/mcp`) || PathPrefix(`/stream`) || PathPrefix(`/openapi.json`) || PathPrefix(`/healthz`) || PathPrefix(`/health`) || PathPrefix(`/.well-known`))
+      - traefik.http.routers.gt.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`) && (PathPrefix(`/auth`) || PathPrefix(`/api`) || PathPrefix(`/mcp`) || PathPrefix(`/stream`) || PathPrefix(`/openapi.json`) || PathPrefix(`/healthz`) || PathPrefix(`/health`) || PathPrefix(`/.well-known`) || PathPrefix(`/share`))
       - traefik.http.routers.gt.priority=100
       - traefik.http.routers.gt.entrypoints=websecure
       - traefik.http.routers.gt.tls=true
