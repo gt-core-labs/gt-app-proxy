@@ -252,6 +252,31 @@ services:
       - traefik.http.routers.gtweb.tls=true
       - traefik.http.routers.gtweb.tls.certresolver=netlify
       - traefik.http.services.gtweb.loadbalancer.server.port=3000
+      # Watchtower watches ONLY this container (scope below); auto-pulls
+      # codecsrayo/gt-web:latest when the digest changes and recreates it.
+      - com.centurylinklabs.watchtower.scope=gt-web
+
+  # Watchtower: auto-deploy for gt-web. Polls DockerHub and, on a new :latest
+  # digest, pulls + recreates the gt-web container in place — no manual
+  # `compose pull && up`. Scoped to `gt-web` so it NEVER touches gt-mcp-server
+  # (which runs a local :embeddings image not on the hub) or the infra services.
+  watchtower:
+    # Maintained fork: containrrr/watchtower is stale (its Docker API client is
+    # too old for modern daemons, "client version 1.25 is too old").
+    image: ghcr.io/nicholas-fedor/watchtower:latest
+    container_name: gt-app-watchtower
+    restart: unless-stopped
+    command: --scope gt-web --cleanup --interval ${WATCHTOWER_INTERVAL:-120}
+    environment:
+      WATCHTOWER_SCOPE: gt-web
+    labels:
+      # Self-scope: a scoped watchtower only acts on matching containers, and
+      # must carry the label itself to operate in that scope.
+      - com.centurylinklabs.watchtower.scope=gt-web
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
 
 volumes:
   dolt-data:
