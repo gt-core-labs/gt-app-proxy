@@ -207,12 +207,51 @@ services:
       - traefik.http.routers.gt-http.entrypoints=web
       - traefik.http.routers.gt-http.middlewares=gt-https
       - traefik.http.middlewares.gt-https.redirectscheme.scheme=https
-      # HTTPS: whole backend (/, /auth/*, /api/v1/*, /mcp, /stream, /health) → :8765, ACME via netlify.
-      - traefik.http.routers.gt.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`)
+      # HTTPS: backend API surfaces only (/auth, /api, /mcp, /stream, /openapi.json,
+      # /health*, /.well-known) → :8765. Everything else (`/`, /login, /tracker, ...)
+      # falls through to gt-web (catch-all router below, lower priority). ACME via netlify.
+      - traefik.http.routers.gt.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`) && (PathPrefix(`/auth`) || PathPrefix(`/api`) || PathPrefix(`/mcp`) || PathPrefix(`/stream`) || PathPrefix(`/openapi.json`) || PathPrefix(`/healthz`) || PathPrefix(`/health`) || PathPrefix(`/.well-known`))
+      - traefik.http.routers.gt.priority=100
       - traefik.http.routers.gt.entrypoints=websecure
       - traefik.http.routers.gt.tls=true
       - traefik.http.routers.gt.tls.certresolver=netlify
       - traefik.http.services.gt.loadbalancer.server.port=8765
+
+  # gt-web: SvelteKit SSR control plane (adapter-node). Serves `/` and the FE
+  # routes; its own browser calls to /auth /api /stream are routed to the backend
+  # by the path rules above, while its SSR reaches the backend directly over the
+  # compose network (GT_BACKEND_URL). Image published to DockerHub by gt-web's
+  # docker-publish workflow (codecsrayo/gt-web:latest); compose pulls it.
+  gt-web:
+    image: codecsrayo/gt-web:latest
+    # Pulled from DockerHub, published by gt-web's docker-publish workflow on
+    # every green CI for main (mirrors gt-mcp-server).
+    pull_policy: always
+    container_name: gt-app-web
+    restart: unless-stopped
+    depends_on:
+      - gt-mcp-server
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # SSR → backend directly over the compose network (bypasses Traefik;
+      # a relative path would re-enter the FE router, never reaching the API).
+      GT_BACKEND_URL: http://gt-mcp-server:8765
+      # adapter-node validates the Origin of form-action POSTs behind the proxy.
+      ORIGIN: https://${GT_DOMAIN:-gt.codecsrayo.com}
+    networks:
+      - default
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proyectos-bi-quare
+      # Catch-all for the host: lowest priority, so the backend path rules win.
+      - traefik.http.routers.gtweb.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`)
+      - traefik.http.routers.gtweb.priority=1
+      - traefik.http.routers.gtweb.entrypoints=websecure
+      - traefik.http.routers.gtweb.tls=true
+      - traefik.http.routers.gtweb.tls.certresolver=netlify
+      - traefik.http.services.gtweb.loadbalancer.server.port=3000
 
 volumes:
   dolt-data:
