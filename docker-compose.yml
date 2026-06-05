@@ -151,6 +151,10 @@ services:
     environment:
       GT_MCP_HTTP_BIND: 0.0.0.0:8765
       GT_DOLT_URL: mysql://${DOLT_USER:-gtapp}@dolt:3307/hq
+      # Multi-tenant routing (hq-mt-cutover.3): set ⇒ X-Workspace selects per-tenant
+      # hq_<ws> via WorkspaceStores::from_base_url (URL with NO db segment). Kept alongside
+      # GT_DOLT_URL (seed/fallback + ensure_database of the default). Unset/empty ⇒ single-tenant.
+      GT_DOLT_BASE_URL: ${GT_DOLT_BASE_URL:-}
       # Object store for binary document attachments (gt-store-blob, docs/11). The
       # server builds an S3 client against MinIO from these; .md content stays in PG.
       GT_BLOB_ENDPOINT: http://minio:9000
@@ -163,6 +167,15 @@ services:
       # Domain dispatch: table domains on PG, event-sourced domains under the
       # event-log root. Unset GT_PG_URL ⇒ server serves issues + meta only.
       GT_PG_URL: postgres://${POSTGRES_USER:-gtapp}:${POSTGRES_PASSWORD:-gtapp}@postgres:5432/${POSTGRES_DB:-gtapp}
+      # OAuth/OIDC DB-backed login providers (hq-idp-db): AES-256-GCM master key that
+      # seals client secrets at rest. Required when the image is built with the `oauth`
+      # feature; without it the OAuth surface fails closed. Optional FE landing URL for
+      # the /auth/callback token handoff.
+      GT_SECRET_KEY: ${GT_SECRET_KEY:-}
+      # App's own callback URL — the redirect_uri sent to the IdP and the allowlist
+      # the /auth/callback validates against. Required when the oauth feature is built.
+      GT_OIDC_REDIRECT_URI: ${GT_OIDC_REDIRECT_URI:-}
+      GT_OAUTH_FE_REDIRECT_URL: ${GT_OAUTH_FE_REDIRECT_URL:-}
       GT_EVENTLOG_ROOT: /var/lib/gt-core
       GT_MCP_ACTOR: ${GT_MCP_ACTOR:-mcp-local}
       # RBAC policy: pick a built-in scope profile shipped in core (dev|readonly|closed).
