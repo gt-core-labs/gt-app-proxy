@@ -9,6 +9,40 @@
 #   docker compose up -d
 #   curl -s http://127.0.0.1:8765/healthz
 services:
+  # Reverse proxy — OWNED BY THIS REPO (no longer borrowed from the plane stack). Terminates
+  # TLS for gt.codecsrayo.com via Let's Encrypt ACME DNS-01 through Netlify and routes the
+  # backend off its labels below. Lives on the `proxy` network (real name proyectos-bi-quare),
+  # the same docker net other stacks (plane/tool) attach to, so it stays a drop-in for plane's
+  # proxy. ACME state persists in the gitignored secrets/acme.json (seeded from plane's certs).
+  proxy:
+    image: traefik:latest
+    container_name: gt-app-proxy
+    restart: unless-stopped
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proyectos-bi-quare
+      - --api.insecure=false
+      - --api.dashboard=false
+      - --accesslog=true
+      - --log.level=INFO
+      - --certificatesresolvers.netlify.acme.email=${TRAEFIK_ACME_EMAIL}
+      - --certificatesresolvers.netlify.acme.storage=/acme.json
+      - --certificatesresolvers.netlify.acme.dnschallenge=true
+      - --certificatesresolvers.netlify.acme.dnschallenge.provider=netlify
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - NETLIFY_TOKEN=${NETLIFY_TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./secrets/acme.json:/acme.json
+    networks:
+      - proxy
+
   # Dolt: canonical tracking DB (hq.issues + meta). MySQL wire, passwordless,
   # superuser ensured idempotently on each boot (ships only root@localhost).
   dolt:
@@ -162,9 +196,9 @@ services:
       # Loopback publish kept for host MCP clients (gt-mcp-cli / Claude Code) bypassing the proxy.
       - "127.0.0.1:${GT_MCP_PORT:-8765}:8765"
     networks:
-      # `default` reaches dolt/postgres/minio; `proyectos-bi-quare` is Traefik's provider network.
+      # `default` reaches dolt/postgres/minio; `proxy` (proyectos-bi-quare) is Traefik's net.
       - default
-      - proyectos-bi-quare
+      - proxy
     labels:
       - traefik.enable=true
       - traefik.docker.network=proyectos-bi-quare
@@ -188,7 +222,8 @@ volumes:
 
 networks:
   default:
-  # Traefik's shared provider network (created by the plane proxy stack). External so the
-  # proxy reaches this backend without this compose owning its lifecycle.
-  proyectos-bi-quare:
-    external: true
+  # Reverse-proxy network this repo now OWNS (was external/plane-owned). Explicit `name` so it is
+  # the same docker net other stacks (plane/tool) attach to — gt-app-proxy creates it, external
+  # consumers join by name. Brought up/down with this stack's `proxy` service.
+  proxy:
+    name: proyectos-bi-quare
