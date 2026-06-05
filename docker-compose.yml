@@ -266,11 +266,10 @@ services:
   # Image published to DockerHub by gt-docs's docker-publish workflow.
   gt-docs:
     image: codecsrayo/gt-docs:latest
-    # First deploy uses a LOCALLY built image (the DockerHub PAT secret is not yet
-    # set on the gt-docs repo, so CI cannot publish). Flip to `always` once the
-    # token lands and :latest is on the hub — watchtower (scope gt-web) then
-    # auto-updates it like gt-web.
-    pull_policy: never
+    # The DockerHub PAT secret now lands on the gt-docs repo, so CI publishes
+    # :latest to the hub — pull it like gt-web. Watchtower (scope gt-web)
+    # auto-updates it on each new digest.
+    pull_policy: always
     container_name: gt-app-docs
     restart: unless-stopped
     depends_on:
