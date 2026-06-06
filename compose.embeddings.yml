@@ -53,6 +53,11 @@ services:
         git config --global --add safe.directory /rig
         git config --global user.email "polecat@gt.codecsrayo.com"
         git config --global user.name "gt-polecat"
+        # Seed the polecat MCP config into the rig (hq-orchd-deploy.13): .mcp.json is gitignored, so
+        # the clone never carries it. Point claude at the public gt MCP over HTTP, authenticated by
+        # the per-polecat GT_TOKEN the daemon mints into each polecat env (claude expands ${GT_TOKEN}).
+        # seed_mcp_config copies this into each polecat worktree.
+        printf '%s' '{"mcpServers":{"gt":{"type":"http","url":"https://gt.codecsrayo.com/mcp","headers":{"Authorization":"Bearer $${GT_TOKEN}"}}}}' > /rig/.mcp.json
         exec gt-orch-server
     environment:
       GT_EVENTLOG_ROOT: /var/lib/gt-core
@@ -60,11 +65,17 @@ services:
       # Cost gate: start with one slot. Idle until a bead lands in the dispatch channel.
       GT_POOL_SIZE: "1"
       GT_POLECAT_MEM_MB: "1024"
+      # Bound re-sling on a dying polecat so a misconfig can't loop paid claude (raise once stable).
+      GT_POLECAT_MAX_RESTARTS: "3"
       # Rig executor: claude polecats in tmux, in-container. RUN_AS unset ⇒ the container IS the
       # isolation boundary (no host gtpolecat user needed). IS_SANDBOX=1 lets claude accept
       # --dangerously-skip-permissions while running as root in this sandboxed container
       # (hq-orchd-deploy.12); the daemon propagates it into each polecat's env.
       IS_SANDBOX: "1"
+      # NOTE (hq-orchd-deploy.13): polecat runs interactive (default args
+      # --dangerously-skip-permissions, NO --print) because the heartbeat + Stop→merge-ready hooks
+      # only fire in interactive mode. The interactive onboarding TUI (theme/trust/bypass) must be
+      # pre-suppressed by seeding the CLAUDE_CONFIG_DIR/.claude.json at sling time (FIX C, pending).
       GT_RIG: hq
       GT_POLECAT_PREFIX: gt
       GT_POLECAT_CMD: claude
