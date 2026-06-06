@@ -61,7 +61,10 @@ services:
       GT_POOL_SIZE: "1"
       GT_POLECAT_MEM_MB: "1024"
       # Rig executor: claude polecats in tmux, in-container. RUN_AS unset ⇒ the container IS the
-      # isolation boundary (no host gtpolecat user needed).
+      # isolation boundary (no host gtpolecat user needed). IS_SANDBOX=1 lets claude accept
+      # --dangerously-skip-permissions while running as root in this sandboxed container
+      # (hq-orchd-deploy.12); the daemon propagates it into each polecat's env.
+      IS_SANDBOX: "1"
       GT_RIG: hq
       GT_POLECAT_PREFIX: gt
       GT_POLECAT_CMD: claude
