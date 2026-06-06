@@ -1,0 +1,44 @@
+# Traefik dynamic config — web claude-account onboarding (hq-quota-onboard-web.2).
+#
+# The gt-orch-server daemon serves POST /onboard/{start,complete} on the HOST (claude is not in the
+# mcp-server container, so the `claude auth login` lifecycle must run where claude lives). The daemon
+# is not a container, so it has no docker labels — this file provider wires the public route to it.
+#
+# Flow: browser → https://gt.codecsrayo.com/api/v1/quota/onboard/{start,complete}
+#   → onboard router (priority 110, above the backend's /api router at 100)
+#   → onboard-auth (forwardAuth to the backend's /auth/me: valid bearer → 200, else 401)
+#   → onboard-rewrite (/api/v1/quota/onboard/<x> → /onboard/<x>)
+#   → onboard service → http://host.docker.internal:9098 (the host daemon, GT_ONBOARD_BIND).
+#
+# Daemon side (orchd.env): GT_ONBOARD_BIND=0.0.0.0:9098 so host.docker.internal reaches it; the host
+# MUST firewall :9098 from the public interface (only the docker bridge needs it). The forwardAuth
+# gate is authn-only (any valid token); authz (admin/quota.write) is enforced by the admin-gated FE
+# page (.3) — tighten to a scope check if the endpoint is ever exposed beyond the admin UI.
+http:
+  routers:
+    onboard:
+      rule: "Host(`gt.codecsrayo.com`) && PathPrefix(`/api/v1/quota/onboard`)"
+      priority: 110
+      entryPoints:
+        - websecure
+      service: onboard
+      middlewares:
+        - onboard-auth
+        - onboard-rewrite
+      tls:
+        certResolver: netlify
+
+  services:
+    onboard:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:9098"
+
+  middlewares:
+    onboard-rewrite:
+      replacePathRegex:
+        regex: "^/api/v1/quota/onboard/(.*)"
+        replacement: "/onboard/$1"
+    onboard-auth:
+      forwardAuth:
+        address: "http://gt-mcp-server:8765/auth/me"
