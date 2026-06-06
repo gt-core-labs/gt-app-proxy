@@ -24,10 +24,6 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=proyectos-bi-quare
-      # File provider (hq-quota-onboard-web.2): the onboarding router/service/middlewares live in
-      # dynamic/onboard.yml because the daemon is a HOST process (no container labels to read).
-      - --providers.file.directory=/etc/traefik/dynamic
-      - --providers.file.watch=true
       - --api.insecure=false
       - --api.dashboard=false
       - --accesslog=true
@@ -44,12 +40,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./secrets/acme.json:/acme.json
-      # Dynamic config for the host-process onboarding route (hq-quota-onboard-web.2).
-      - ./dynamic:/etc/traefik/dynamic:ro
-    # Reach the gt-orch-server daemon, which runs on the HOST (not a container): the onboarding
-    # service in dynamic/onboard.yml targets http://host.docker.internal:9098 (hq-quota-onboard-web.2).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - proxy
 
