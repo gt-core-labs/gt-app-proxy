@@ -15,3 +15,82 @@ services:
     pull_policy: never
     environment:
       GT_EMBEDDINGS: "1"
+      # hq-terminal: opt into the interactive PTY terminal (GET /api/v1/terminal/ws). REMOTE
+      # SHELL into this container, gated by the terminal.exec scope + RS256 auth. Off unless set.
+      GT_TERMINAL_ENABLE: "1"
+
+  # gt-orch-server: the autonomous orchestration daemon, now a containerized service instead of a
+  # host-side `sudo ./run.sh` (hq-orchd-deploy.11). Same local :embeddings image (it already carries
+  # claude + git; the Dockerfile adds tmux + the gt-orch-server binary), picked via `command`.
+  #
+  # COST GATE: behind the `orchd` compose profile, so a plain `compose up` never starts it. Bring it
+  # up explicitly with `--profile orchd` once accounts are onboarded and a rig token is set. It boots
+  # IDLE — no dispatch message ⇒ no polecat slung ⇒ no paid claude — until a bead is dropped in the
+  # dispatch channel. restart:unless-stopped ⇒ it survives reboots and redeploys like the rest.
+  #
+  # Everything lives in the container except the shared docker volumes: the eventlog (gt-eventlog,
+  # same as the backend — so onboarded accounts + channels are shared) and the rig checkout +
+  # per-polecat worktrees (gt-orchd-rig / gt-orchd-rig-wt), cloned in-container at boot.
+  gt-orch-server:
+    image: codecsrayo/gt-core-mcp-server:embeddings
+    pull_policy: never
+    container_name: gt-app-orchd
+    profiles: ["orchd"]
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - dolt
+    # Clone the rig into its volume on first boot (private repo ⇒ needs GT_RIG_GIT_TOKEN), set the
+    # commit identity for polecat commits, then exec the daemon. Idempotent: skips clone if present.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ ! -d /rig/.git ]; then
+          echo "[orchd] cloning rig into /rig from $${GT_RIG_GIT_URL}"
+          git clone "https://x-access-token:$${GT_RIG_GIT_TOKEN}@github.com/gt-core-labs/gt-core.git" /rig
+        fi
+        git config --global --add safe.directory /rig
+        git config --global user.email "polecat@gt.codecsrayo.com"
+        git config --global user.name "gt-polecat"
+        exec gt-orch-server
+    environment:
+      GT_EVENTLOG_ROOT: /var/lib/gt-core
+      GT_WORKSPACE: default
+      # Cost gate: start with one slot. Idle until a bead lands in the dispatch channel.
+      GT_POOL_SIZE: "1"
+      GT_POLECAT_MEM_MB: "1024"
+      # Rig executor: claude polecats in tmux, in-container. RUN_AS unset ⇒ the container IS the
+      # isolation boundary (no host gtpolecat user needed).
+      GT_RIG: hq
+      GT_POLECAT_PREFIX: gt
+      GT_POLECAT_CMD: claude
+      GT_RIG_PATH: /rig
+      GT_POLECAT_WORKTREE_ROOT: /rig-wt
+      # Channels + heartbeats + accounts on the shared eventlog volume (backend ↔ daemon agree).
+      GT_CHANNEL_ROOT: /var/lib/gt-core/.channels
+      GT_MERGE_READY_CHANNEL: merge-ready
+      GT_DISPATCH_CHANNEL: dispatch
+      GT_QUOTA_FEED_CHANNEL: quota-feed
+      GT_HEARTBEAT_DIR: /var/lib/gt-core/.heartbeats
+      GT_CLAUDE_ACCOUNTS_ROOT: /var/lib/gt-core/accounts
+      # Per-agent least-privilege GT_TOKEN minting (same RS256 key the backend signs/verifies with).
+      GT_JWT_RS256_PRIVATE_KEY_FILE: /run/secrets/jwt_private.pem
+      GT_JWT_RS256_SIGNING_KID: ${GT_JWT_RS256_SIGNING_KID:-gt-main}
+      GT_METRICS_BIND: 0.0.0.0:9099
+      # Rig clone credentials (operator-provided; private repo). Without GT_RIG_GIT_TOKEN the boot
+      # clone fails and the daemon does not start — set it before `--profile orchd up`.
+      GT_RIG_GIT_URL: ${GT_RIG_GIT_URL:-https://github.com/gt-core-labs/gt-core.git}
+      GT_RIG_GIT_TOKEN: ${GT_RIG_GIT_TOKEN:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - gt-eventlog:/var/lib/gt-core
+      - gt-orchd-rig:/rig
+      - gt-orchd-rig-wt:/rig-wt
+      - ./secrets/jwt_private.pem:/run/secrets/jwt_private.pem:ro
+    networks:
+      - default
+
+volumes:
+  gt-orchd-rig:
+  gt-orchd-rig-wt:
