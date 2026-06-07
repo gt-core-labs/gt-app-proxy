@@ -178,6 +178,11 @@ services:
       GT_OAUTH_FE_REDIRECT_URL: ${GT_OAUTH_FE_REDIRECT_URL:-}
       GT_EVENTLOG_ROOT: /var/lib/gt-core
       GT_MCP_ACTOR: ${GT_MCP_ACTOR:-mcp-local}
+      # Per-role MCP (hq-role-mcp): the interactive terminal's claude launches `gt mcp` in THIS
+      # container; its minted .gt-config points the proxy back at the server here. In-container
+      # loopback (same process) avoids the public Traefik/TLS/Host-allowlist hop. Default is
+      # http://<bind>=http://0.0.0.0:8765 which dials dirty, so pin loopback explicitly.
+      GT_SELF_URL: ${GT_SELF_URL:-http://127.0.0.1:8765}
       # RBAC policy: pick a built-in scope profile shipped in core (dev|readonly|closed).
       # For a bespoke policy, drop GT_MCP_SCOPE_PROFILE and mount a file at GT_MCP_SCOPE_CONFIG
       # instead (it takes precedence).
