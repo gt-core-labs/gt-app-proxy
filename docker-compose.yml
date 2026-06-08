@@ -226,9 +226,8 @@ services:
       - /home/nixos/gt-web:/home/nixos/gt-web:ro
       - /home/nixos/gt-app-proxy:/home/nixos/gt-app-proxy:ro
       - /home/nixos/.local/share/uv/python:/home/nixos/.local/share/uv/python:ro
-      # claude binary for interactive role terminal sessions (hq-term-dock).
-      - /home/nixos/.local/share/claude:/home/nixos/.local/share/claude:ro
-      - /home/nixos/.local/bin/claude:/home/nixos/.local/bin/claude:ro
+      # claude is baked into the image via npm install -g @anthropic-ai/claude-code (hq-doctor).
+      # No host mounts for claude — the entrypoint symlinks /usr/local/bin/claude → $HOME/.local/bin.
     ports:
       # Loopback publish kept for host MCP clients (gt-mcp-cli / Claude Code) bypassing the proxy.
       - "127.0.0.1:${GT_MCP_PORT:-8765}:8765"
