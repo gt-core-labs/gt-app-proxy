@@ -10,9 +10,13 @@
 services:
   gt-mcp-server:
     image: codecsrayo/gt-core-mcp-server:embeddings
-    # Built locally on the host (not pushed to DockerHub), so never try to pull — use the local
-    # image. Overrides the base service's `pull_policy: always` (which targets :latest).
-    pull_policy: never
+    # CI (gt-core docker-publish) now pushes :embeddings to DockerHub on every green main.
+    # pull_policy: always so compose pull + watchtower can refresh it automatically.
+    pull_policy: always
+    labels:
+      # Watchtower scope: the watchtower service (scope gt-web) auto-pulls this container
+      # when the :embeddings digest changes on DockerHub — same behaviour as gt-web/gt-docs.
+      - com.centurylinklabs.watchtower.scope=gt-web
     environment:
       GT_EMBEDDINGS: "1"
       # hq-terminal: opt into the interactive PTY terminal (GET /api/v1/terminal/ws). REMOTE

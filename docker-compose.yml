@@ -336,10 +336,10 @@ services:
       # once the image is published to DockerHub (and pull_policy flips to always).
       - com.centurylinklabs.watchtower.scope=gt-web
 
-  # Watchtower: auto-deploy for gt-web. Polls DockerHub and, on a new :latest
-  # digest, pulls + recreates the gt-web container in place — no manual
-  # `compose pull && up`. Scoped to `gt-web` so it NEVER touches gt-mcp-server
-  # (which runs a local :embeddings image not on the hub) or the infra services.
+  # Watchtower: auto-deploy for gt-web + gt-mcp-server. Polls DockerHub and, on a
+  # new digest, pulls + recreates the container in place — no manual `compose pull
+  # && up`. Scoped to `gt-web` (also covers gt-mcp-server via its embeddings
+  # overlay label). NEVER touches infra services (dolt/pg/minio/proxy).
   watchtower:
     # Maintained fork: containrrr/watchtower is stale (its Docker API client is
     # too old for modern daemons, "client version 1.25 is too old").
