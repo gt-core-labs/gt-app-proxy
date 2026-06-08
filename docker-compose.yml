@@ -205,11 +205,25 @@ services:
       GT_ADMIN_EMAIL: ${GT_ADMIN_EMAIL:-}
       GT_ADMIN_PASSWORD: ${GT_ADMIN_PASSWORD:-}
       RUST_LOG: ${RUST_LOG:-info}
+      # Graph indexer (hq-mayor-platform-report-20260608.3): path to the Python interpreter
+      # that has graphify + networkx installed. When set, used as the fallback when a repo's
+      # own .graphify-venv/bin/python is absent or inaccessible. The repo and venv volumes
+      # below make the .graphify-venv symlink resolve inside the container, so if the server
+      # finds the per-repo venv (the normal path) this env is a no-op.
+      GT_GRAPHIFY_PYTHON: ${GT_GRAPHIFY_PYTHON:-/home/nixos/gt-core/.graphify-venv/bin/python}
     volumes:
       - gt-eventlog:/var/lib/gt-core
       # RS256 keys mounted read-only from the gitignored secrets/ dir on the host.
       - ./secrets/jwt_private.pem:/run/secrets/jwt_private.pem:ro
       - ./secrets/jwt_public.pem:/run/secrets/jwt_public.pem:ro
+      # Graph indexer: mount the rig repos + the uv Python installation so the server can
+      # run graphify inside the container. gt-core is rw (graphify writes graphify-out/ there).
+      # All other rig repos (gt, gtweb, gtproxy) are mounted ro (read for indexing only).
+      - /home/nixos/gt-core:/home/nixos/gt-core
+      - /home/nixos/gt:/home/nixos/gt:ro
+      - /home/nixos/gt-web:/home/nixos/gt-web:ro
+      - /home/nixos/gt-app-proxy:/home/nixos/gt-app-proxy:ro
+      - /home/nixos/.local/share/uv/python:/home/nixos/.local/share/uv/python:ro
     ports:
       # Loopback publish kept for host MCP clients (gt-mcp-cli / Claude Code) bypassing the proxy.
       - "127.0.0.1:${GT_MCP_PORT:-8765}:8765"
