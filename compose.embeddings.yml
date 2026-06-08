@@ -62,11 +62,9 @@ services:
         git config --global --add safe.directory /rig
         git config --global user.email "polecat@gt.codecsrayo.com"
         git config --global user.name "gt-polecat"
-        # Seed the polecat MCP config into the rig (hq-orchd-deploy.13): .mcp.json is gitignored, so
-        # the clone never carries it. Point claude at the public gt MCP over HTTP, authenticated by
-        # the per-polecat GT_TOKEN the daemon mints into each polecat env (claude expands ${GT_TOKEN}).
-        # seed_mcp_config copies this into each polecat worktree.
-        printf '%s' '{"mcpServers":{"gt":{"type":"http","url":"https://gt.codecsrayo.com/mcp","headers":{"Authorization":"Bearer $${GT_TOKEN}"}}}}' > /rig/.mcp.json
+        # .mcp.json is no longer seeded here: the daemon generates a fresh per-sling .mcp.json
+        # from GT_SELF_URL + the per-session token (hq-polecat-rig-config.1). The old static
+        # file used ${GT_TOKEN} which claude never expanded — it was a literal string.
         exec gt-orch-server
     environment:
       GT_EVENTLOG_ROOT: /var/lib/gt-core
@@ -97,6 +95,9 @@ services:
       GT_QUOTA_FEED_CHANNEL: quota-feed
       GT_HEARTBEAT_DIR: /var/lib/gt-core/.heartbeats
       GT_CLAUDE_ACCOUNTS_ROOT: /var/lib/gt-core/accounts
+      # Internal MCP server URL for dynamic .mcp.json generation per sling (hq-polecat-rig-config.1):
+      # polecats talk to the MCP server directly over the Docker network — no Traefik hop.
+      GT_SELF_URL: http://gt-mcp-server:8765
       # Per-agent least-privilege GT_TOKEN minting (same RS256 key the backend signs/verifies with).
       GT_JWT_RS256_PRIVATE_KEY_FILE: /run/secrets/jwt_private.pem
       GT_JWT_RS256_SIGNING_KID: ${GT_JWT_RS256_SIGNING_KID:-gt-main}
