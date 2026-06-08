@@ -211,6 +211,7 @@ services:
       # below make the .graphify-venv symlink resolve inside the container, so if the server
       # finds the per-repo venv (the normal path) this env is a no-op.
       GT_GRAPHIFY_PYTHON: ${GT_GRAPHIFY_PYTHON:-/home/nixos/gt-core/.graphify-venv/bin/python}
+      GT_TERMINAL_ENABLE: "1"
     volumes:
       - gt-eventlog:/var/lib/gt-core
       # RS256 keys mounted read-only from the gitignored secrets/ dir on the host.
