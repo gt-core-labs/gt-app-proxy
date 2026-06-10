@@ -1,0 +1,38 @@
+# Helper pod for the event-log migration (migrate-eventlog.sh).
+#
+# A throwaway pod that mounts ONLY the gt-eventlog PVC at /data so the migration
+# can `kubectl cp` a tarball in and untar it WITHOUT contending with a running API
+# pod for the mount (scale the API/daemon to 0 during the window — see
+# migrate/README.md). Deleted by the script after the copy + verification.
+#
+# Namespace is supplied on the command line (`kubectl -n gt apply -f ...`); the
+# PVC name (gt-eventlog) matches chart/gt/templates/pvc-shared.yaml for release
+# `gt`. The securityContext mirrors the chart's non-root fsGroup so the untarred
+# files are owned by uid/gid 1000 (matches the API/daemon pods that read them).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gt-eventlog-migrate
+  labels:
+    app.kubernetes.io/name: gt
+    app.kubernetes.io/component: migrate-eventlog
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  containers:
+    - name: shell
+      # busybox ships tar + find + sha256sum (the verify manifest needs them);
+      # pin a digest in prod for an auditable, immutable helper.
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: gt-eventlog
