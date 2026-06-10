@@ -215,6 +215,12 @@ services:
       PATH: /home/nixos/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     volumes:
       - gt-eventlog:/var/lib/gt-core
+      # git safe.directory='*' (hq-vcs-connections.10): the bind-mounted rig repos are owned by host
+      # uid 1000 while the container runs as root → `git -C <repo> rev-parse` aborts with "dubious
+      # ownership" and the warden's head_commit falls back to "unknown". This durable mount fixes it
+      # across recreate (a `git config --global` via docker exec is ephemeral). Superseded by non-root
+      # + fsGroup under k8s (hq-talos-migration.5).
+      - ./gitconfig:/root/.gitconfig:ro
       # RS256 keys mounted read-only from the gitignored secrets/ dir on the host.
       - ./secrets/jwt_private.pem:/run/secrets/jwt_private.pem:ro
       - ./secrets/jwt_public.pem:/run/secrets/jwt_public.pem:ro

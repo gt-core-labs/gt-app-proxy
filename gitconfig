@@ -1,0 +1,9 @@
+# Mounted read-only at /root/.gitconfig in gt-mcp-server (hq-vcs-connections.10).
+# The bind-mounted rig repos are owned by host uid 1000 while the container runs as root, so
+# `git -C <repo> rev-parse` aborts with "detected dubious ownership" and the graph warden's
+# head_commit() falls back to "unknown" (freshness/commit tracking degraded). safe.directory='*'
+# makes git trust the repos regardless of owner — durably, surviving container recreate (a
+# `git config --global` via docker exec is ephemeral and is lost on restart).
+# Superseded once the platform runs non-root under k8s (runAsNonRoot + fsGroup, hq-talos-migration.5).
+[safe]
+	directory = *
