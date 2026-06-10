@@ -1,2 +1,7 @@
 .env
 secrets/
+# Real Helm secret overrides — never commit (chart/gt/README.md).
+values-secret.yaml
+values-secret.*.yaml
+chart/**/charts/
+chart/**/*.tgz

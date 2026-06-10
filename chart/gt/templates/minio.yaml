@@ -1,0 +1,91 @@
+{{- $fullname := include "gt.fullname" . -}}
+# MinIO — S3-compatible object store for binary document attachment BYTES
+# (compose `minio`). StatefulSet + headless Service + PVC (bead .3). The bucket
+# is created by a one-shot Job (minio-init.yaml). fsGroup owns /data.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-minio
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "gt.selectorLabels" (dict "root" . "component" "minio") | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.minio.apiPort }}
+      targetPort: 9000
+    - name: console
+      port: {{ .Values.minio.consolePort }}
+      targetPort: 9001
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-minio
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-minio
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "gt.selectorLabels" (dict "root" . "component" "minio") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gt.selectorLabels" (dict "root" . "component" "minio") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "gt.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: minio
+          image: "{{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}"
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "gt.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.minio.storage }}

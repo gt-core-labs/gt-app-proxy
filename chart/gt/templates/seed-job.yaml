@@ -1,0 +1,61 @@
+{{- if .Values.seed.enabled -}}
+{{- $fullname := include "gt.fullname" . -}}
+# Schema-bootstrap Job (post-install/upgrade hook). The gt-mcp-server binary
+# already runs DoltIssues::ensure_database + ensure_schema and the PG migration
+# array on boot, so a dedicated migrate command is not strictly required; this
+# Job exists as the documented GitOps seam where migrations run BEFORE the API
+# rolls (hook-weight orders it after minio-init). It currently performs a
+# readiness wait on Dolt + Postgres so the first API pod boots against ready
+# stores.
+#
+# LIVE SEEDS ARE STUBBED here pending hq-greenfield-seeds: the knowledge prompts,
+# IdP/OAuth providers, rig catalog and quota accounts are NOT seeded by this Job.
+# When hq-greenfield-seeds lands, replace the placeholder below with its seed
+# command (a `gt`/REST invocation against the in-cluster API).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-seed
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "gt.selectorLabels" (dict "root" . "component" "seed") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "gt.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: seed
+          image: "{{ .Values.mcpServer.image.repository }}:{{ .Values.mcpServer.image.tag }}"
+          imagePullPolicy: {{ .Values.mcpServer.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "[seed] waiting for stores to accept connections..."
+              for i in $(seq 1 60); do
+                if (echo > /dev/tcp/{{ $fullname }}-dolt/3307) >/dev/null 2>&1 \
+                   && (echo > /dev/tcp/{{ $fullname }}-postgres/5432) >/dev/null 2>&1; then
+                  echo "[seed] dolt + postgres reachable"
+                  break
+                fi
+                echo "[seed] stores not ready yet ($i)"; sleep 2
+              done
+              # Schema bootstrap is performed by the gt-mcp-server binary on boot
+              # (ensure_database + ensure_schema + PG migration array). No explicit
+              # migrate subcommand to invoke here.
+              # STUB (hq-greenfield-seeds): live seeds (knowledge/IdP/rigs/quota)
+              # are filled by that epic — wire its seed command here when it lands.
+              echo "[seed] done (schema bootstrapped by API boot; live seeds pending hq-greenfield-seeds)"
+{{- end -}}

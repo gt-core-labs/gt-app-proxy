@@ -1,0 +1,163 @@
+{{- $fullname := include "gt.fullname" . -}}
+# gt-mcp-server API tier (bead .2 + .4). STATELESS, N replicas. Readiness +
+# liveness probes on /healthz gate the rolling update (maxUnavailable 0): a pod
+# that panics at boot never becomes Ready, so it never receives traffic and never
+# replaces a healthy pod — the exact failure mode the .9 watchtower auto-deploy
+# caused (blind recreate → crash loop → manual rollback) is now structurally
+# impossible. Rollback = redeploy the previous immutable tag (GitOps), not a
+# manual docker recreate.
+#
+# DAEMON SPLIT (bead .4): the API replicas must NOT run the singleton daemon
+# loops (double tick / races across N pods). The gt-mcp-server binary has no
+# single GT_RUN_DAEMONS gate TODAY, so this Deployment forces every per-daemon
+# loop the binary DOES gate to its OFF value, and sets GT_RUN_DAEMONS=0
+# forward-compat for the planned gt-core follow-up. Loops with no off-switch
+# today (the interactive session reaper; the archive daemon) still spawn on the
+# API pods until the follow-up lands — documented in the chart README as the
+# remaining gt-core change for a clean split.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-mcp-server
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-server
+spec:
+  replicas: {{ .Values.mcpServer.api.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.mcpServer.api.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.mcpServer.api.rollingUpdate.maxSurge }}
+  selector:
+    matchLabels:
+      {{- include "gt.selectorLabels" (dict "root" . "component" "mcp-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gt.selectorLabels" (dict "root" . "component" "mcp-server") | nindent 8 }}
+      annotations:
+        # Roll the pods when the config/secret change (GitOps: a values bump
+        # produces a new hash → a controlled rolling update).
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "gt.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: mcp-server
+          image: "{{ .Values.mcpServer.image.repository }}:{{ .Values.mcpServer.image.tag }}"
+          imagePullPolicy: {{ .Values.mcpServer.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "gt.configName" . }}
+          env:
+            # Assemble the PG URLs from the secret password (host/user/db from CM).
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: GT_PG_URL
+              value: "postgres://$(GT_PG_USER):$(POSTGRES_PASSWORD)@$(GT_PG_HOST):$(GT_PG_PORT)/$(GT_PG_DB)"
+            - name: GT_PG_AUDIT_URL
+              value: "postgres://$(GT_PG_USER):$(POSTGRES_PASSWORD)@$(GT_PG_HOST):$(GT_PG_PORT)/$(GT_PG_DB)"
+            # Blob client credentials reuse the MinIO root creds (compose parity).
+            - name: GT_BLOB_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: GT_BLOB_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
+            # OAuth / admin-seed / GitHub-App secrets.
+            - name: GT_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_SECRET_KEY } }
+            - name: GT_OIDC_REDIRECT_URI
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_OIDC_REDIRECT_URI } }
+            - name: GT_OAUTH_FE_REDIRECT_URL
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_OAUTH_FE_REDIRECT_URL } }
+            - name: GT_ADMIN_EMAIL
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_ADMIN_EMAIL } }
+            - name: GT_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_ADMIN_PASSWORD } }
+            - name: GT_GITHUB_APP_ID
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_GITHUB_APP_ID } }
+            - name: GT_GITHUB_APP_WEBHOOK_SECRET
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_GITHUB_APP_WEBHOOK_SECRET } }
+            - name: GT_GITHUB_APP_PRIVATE_KEY_FILE
+              value: /run/secrets/github_app_private_key.pem
+            # --- DAEMON OFF gate on the API tier (bead .4) ---
+            - name: GT_RUN_DAEMONS
+              value: "0"                       # forward-compat for the gt-core follow-up
+            - name: GT_GRAPH_DRIFT_TICK_SECS
+              value: "0"                       # honoured today → drift-reconcile off
+            - name: GT_ACCOUNTS_GC_TICK_SECS
+              value: "0"                       # honoured today → account GC off
+          ports:
+            - name: http
+              containerPort: 8765
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.mcpServer.api.resources | nindent 12 }}
+          volumeMounts:
+            - name: eventlog
+              mountPath: /var/lib/gt-core
+            - name: graph
+              mountPath: /var/lib/gt-graph
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: eventlog
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-eventlog
+        - name: graph
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-graph
+        - name: secrets
+          secret:
+            secretName: {{ include "gt.secretName" . }}
+            items:
+              - key: jwt_private.pem
+                path: jwt_private.pem
+              - key: jwt_public.pem
+                path: jwt_public.pem
+              - key: github_app_private_key.pem
+                path: github_app_private_key.pem
+---
+# Stable ClusterIP for the API. The Ingress + the FE SSR + the role terminal's
+# in-cluster `gt mcp` proxy (GT_SELF_URL) all dial this.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-mcp-server
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "gt.selectorLabels" (dict "root" . "component" "mcp-server") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8765
+      targetPort: 8765

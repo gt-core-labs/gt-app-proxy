@@ -1,0 +1,169 @@
+{{- if .Values.daemons.enabled -}}
+{{- $fullname := include "gt.fullname" . -}}
+# SINGLETON daemon Deployment (beads .4 + orchd). replicas=1, NEVER scaled — the
+# orchd binary + the in-process daemon loops (interactive session reaper, archive
+# sweep, drift-reconcile, account GC, convoy→scheduler bridge, quota rotation)
+# must have exactly ONE ticker or they double-fire and race (bead .4 caveat).
+# Recreate strategy (not RollingUpdate) so the old singleton is gone before the
+# new one starts — two concurrent tickers must never overlap.
+#
+# Mirrors compose `gt-orch-server`: clone the rig into its PVC on first boot,
+# set the commit identity, exec the daemon. fsGroup makes /rig writable by uid
+# 1000 WITHOUT the safe.directory hack (.10/.11 obsolete). Idle until a bead is
+# dropped on the dispatch channel (cost gate: GT_POOL_SIZE=1).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-orchd
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orchd
+spec:
+  replicas: {{ .Values.daemons.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gt.selectorLabels" (dict "root" . "component" "orchd") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gt.selectorLabels" (dict "root" . "component" "orchd") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "gt.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: orchd
+          image: "{{ .Values.daemons.image.repository }}:{{ .Values.daemons.image.tag }}"
+          imagePullPolicy: {{ .Values.daemons.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              if [ ! -d /rig/.git ]; then
+                echo "[orchd] cloning rig into /rig from $GT_RIG_GIT_URL"
+                git clone "https://x-access-token:$GT_RIG_GIT_TOKEN@github.com/gt-core-labs/gt-core.git" /rig
+              fi
+              git config --global user.email "polecat@gt.codecsrayo.com"
+              git config --global user.name "gt-polecat"
+              exec gt-orch-server
+          envFrom:
+            - configMapRef:
+                name: {{ include "gt.configName" . }}
+          env:
+            # PG URLs from the secret password.
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: POSTGRES_PASSWORD } }
+            - name: GT_PG_URL
+              value: "postgres://$(GT_PG_USER):$(POSTGRES_PASSWORD)@$(GT_PG_HOST):$(GT_PG_PORT)/$(GT_PG_DB)"
+            - name: GT_PG_AUDIT_URL
+              value: "postgres://$(GT_PG_USER):$(POSTGRES_PASSWORD)@$(GT_PG_HOST):$(GT_PG_PORT)/$(GT_PG_DB)"
+            # --- DAEMON ON gate on the singleton (bead .4): this pod owns every tick ---
+            - name: GT_RUN_DAEMONS
+              value: "1"                       # forward-compat for the gt-core follow-up
+            - name: GT_RECONCILE_TICK_SECS
+              value: {{ .Values.daemons.reconcileTickSecs | quote }}
+            - name: GT_ACCOUNTS_GC_TICK_SECS
+              value: {{ .Values.daemons.accountsGcTickSecs | quote }}
+            - name: GT_GRAPH_DRIFT_TICK_SECS
+              value: {{ .Values.daemons.graphDriftTickSecs | quote }}
+            # --- orchd executor config (compose gt-orch-server) ---
+            - name: GT_WORKSPACE
+              value: default
+            - name: GT_POOL_SIZE
+              value: {{ .Values.daemons.poolSize | quote }}
+            - name: GT_POLECAT_MEM_MB
+              value: {{ .Values.daemons.polecatMemMb | quote }}
+            - name: GT_POLECAT_MAX_RESTARTS
+              value: {{ .Values.daemons.polecatMaxRestarts | quote }}
+            - name: IS_SANDBOX
+              value: "1"
+            - name: GT_RIG
+              value: {{ .Values.daemons.rig | quote }}
+            - name: GT_POLECAT_PREFIX
+              value: {{ .Values.daemons.polecatPrefix | quote }}
+            - name: GT_POLECAT_CMD
+              value: claude
+            - name: GT_RIG_PATH
+              value: /rig
+            - name: GT_POLECAT_WORKTREE_ROOT
+              value: /rig-wt
+            - name: GT_MERGE_READY_CHANNEL
+              value: {{ .Values.daemons.mergeReadyChannel | quote }}
+            - name: GT_QUOTA_FEED_CHANNEL
+              value: {{ .Values.daemons.quotaFeedChannel | quote }}
+            - name: GT_HEARTBEAT_DIR
+              value: /var/lib/gt-core/.heartbeats
+            - name: GT_CLAUDE_ACCOUNTS_ROOT
+              value: /var/lib/gt-core/accounts
+            - name: GT_METRICS_BIND
+              value: 0.0.0.0:9099
+            - name: GT_RIG_GIT_URL
+              value: {{ .Values.daemons.rigGitUrl | quote }}
+            - name: GT_RIG_GIT_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_RIG_GIT_TOKEN } }
+          ports:
+            - name: metrics
+              containerPort: 9099
+          resources:
+            {{- toYaml .Values.daemons.resources | nindent 12 }}
+          volumeMounts:
+            - name: eventlog
+              mountPath: /var/lib/gt-core
+            - name: rig
+              mountPath: /rig
+            - name: rig-wt
+              mountPath: /rig-wt
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: eventlog
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-eventlog
+        - name: rig
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-orchd-rig
+        - name: rig-wt
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-orchd-rig-wt
+        - name: secrets
+          secret:
+            secretName: {{ include "gt.secretName" . }}
+            items:
+              - key: jwt_private.pem
+                path: jwt_private.pem
+---
+# orchd rig + worktree PVCs (compose volumes gt-orchd-rig / gt-orchd-rig-wt). The
+# rig is cloned server-side into the volume on boot (no host bind-mount) — the
+# correct k8s pattern called out in the epic design.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-orchd-rig
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "gt.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-orchd-rig-wt
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "gt.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: 5Gi
+{{- end -}}

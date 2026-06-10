@@ -1,0 +1,7 @@
+# Patterns to ignore when packaging.
+.git/
+*.swp
+*.tmp
+# NEVER package real secret overrides.
+values-secret.yaml
+values-secret.*.yaml

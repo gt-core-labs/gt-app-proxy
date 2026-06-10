@@ -1,0 +1,56 @@
+{{- $fullname := include "gt.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gt.configName" . }}
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+data:
+  # --- Listen / identity ---
+  GT_MCP_HTTP_BIND: "0.0.0.0:8765"
+  GT_MCP_ACTOR: {{ .Values.mcpServer.actor | quote }}
+  GT_MCP_SCOPE_PROFILE: {{ .Values.mcpServer.scopeProfile | quote }}
+  RUST_LOG: {{ .Values.mcpServer.rustLog | quote }}
+
+  # --- Stores (in-cluster service DNS; <fullname>-<svc>) ---
+  # Dolt is passwordless on the internal network (compose parity).
+  GT_DOLT_URL: "mysql://{{ .Values.dolt.user }}@{{ $fullname }}-dolt:{{ .Values.dolt.port }}/hq"
+  GT_DOLT_BASE_URL: {{ .Values.mcpServer.doltBaseUrl | quote }}
+  # Postgres URL is assembled in each pod from the secret password (see env);
+  # here we publish the non-secret host/user/db parts.
+  GT_PG_HOST: "{{ $fullname }}-postgres"
+  GT_PG_PORT: {{ .Values.postgres.port | quote }}
+  GT_PG_USER: {{ .Values.postgres.user | quote }}
+  GT_PG_DB: {{ .Values.postgres.db | quote }}
+
+  # --- Object store (MinIO) ---
+  GT_BLOB_ENDPOINT: "http://{{ $fullname }}-minio:{{ .Values.minio.apiPort }}"
+  GT_BLOB_BUCKET: {{ .Values.minio.bucket | quote }}
+  GT_BLOB_REGION: {{ .Values.minio.region | quote }}
+
+  # --- Event log + graph output ---
+  GT_EVENTLOG_ROOT: "/var/lib/gt-core"
+
+  # --- Auth / JWT (key bodies live in the Secret, mounted as files) ---
+  GT_JWT_RS256_PRIVATE_KEY_FILE: "/run/secrets/jwt_private.pem"
+  GT_JWT_RS256_SIGNING_KID: {{ .Values.mcpServer.jwtSigningKid | quote }}
+  GT_JWT_RS256_KEYS: "{{ .Values.mcpServer.jwtSigningKid }}=/run/secrets/jwt_public.pem"
+  GT_AUTH_ACCESS_TTL_SECS: {{ .Values.mcpServer.authAccessTtlSecs | quote }}
+  GT_AUTH_REFRESH_TTL_SECS: {{ .Values.mcpServer.authRefreshTtlSecs | quote }}
+
+  # --- Public reverse-proxy / MCP host allow-list ---
+  GT_MCP_ALLOWED_HOSTS: "{{ .Values.domain }},{{ .Values.domain }}:443"
+  # In-cluster loopback for the role terminal's `gt mcp` proxy (compose GT_SELF_URL).
+  GT_SELF_URL: "http://{{ $fullname }}-mcp-server:8765"
+
+  {{- if .Values.mcpServer.embeddings }}
+  GT_EMBEDDINGS: "1"
+  {{- end }}
+  {{- if .Values.mcpServer.terminalEnable }}
+  GT_TERMINAL_ENABLE: "1"
+  {{- end }}
+
+  # --- Daemon cadence (shared default; the API Deployment OVERRIDES these to the
+  #     OFF value so only the singleton ticks — see deployment-api.yaml). ---
+  GT_CHANNEL_ROOT: {{ .Values.daemons.channelRoot | quote }}
+  GT_DISPATCH_CHANNEL: {{ .Values.daemons.dispatchChannel | quote }}

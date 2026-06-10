@@ -1,0 +1,250 @@
+# Default values for the gt-core platform chart.
+#
+# These mirror the docker-compose assembly in gt-app-proxy (docker-compose.yml +
+# compose.embeddings.yml). Secret material is templated from `.Values.secrets`
+# but MUST be supplied at install time from a gitignored values-secret.yaml or
+# `--set` — the placeholders here are deliberately empty/dummy and never the real
+# prod values. See chart/README.md.
+
+# ---------------------------------------------------------------------------
+# Global / shared
+# ---------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# Public domain Traefik/Ingress routes to this platform (compose GT_DOMAIN).
+domain: gt.codecsrayo.com
+
+# Non-root identity applied to every pod that owns a PVC. The kubelet chowns the
+# mounted volume to fsGroup, so a uid-1000 process can write it WITHOUT the
+# root-owned bind-mount + git safe.directory hack that .10/.11 needed in compose.
+# This is what OBSOLETES hq-vcs-connections.10 (gitconfig) and .11 (privdrop).
+podSecurity:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# Image pull secret(s) for the private DockerHub repos (codecsrayo/*).
+imagePullSecrets: []
+# - name: dockerhub
+
+# ---------------------------------------------------------------------------
+# gt-mcp-server — the API (stateless, N replicas) + the singleton daemon split
+# ---------------------------------------------------------------------------
+mcpServer:
+  image:
+    # compose.embeddings.yml swaps to the heavier :embeddings image. Use an
+    # IMMUTABLE tag (digest or a release sha) in prod for GitOps rollback —
+    # :embeddings is a moving tag kept here only to match compose defaults.
+    repository: codecsrayo/gt-core-mcp-server
+    tag: embeddings
+    pullPolicy: IfNotPresent
+  # API tier: stateless, scales horizontally. Probes gate rolling updates so a
+  # pod that panics at boot never receives traffic nor replaces a healthy one
+  # (the .9 watchtower crash-loop failure mode is structurally eliminated).
+  api:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+    # maxUnavailable 0 → never drop below desired during a rollout.
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  # Common env shared by API + daemon pods (compose gt-mcp-server environment).
+  embeddings: true            # GT_EMBEDDINGS=1 (compose.embeddings.yml)
+  terminalEnable: true        # GT_TERMINAL_ENABLE=1
+  scopeProfile: dev           # GT_MCP_SCOPE_PROFILE
+  actor: mcp-local            # GT_MCP_ACTOR
+  rustLog: info               # RUST_LOG
+  authAccessTtlSecs: 900      # GT_AUTH_ACCESS_TTL_SECS
+  authRefreshTtlSecs: 2592000 # GT_AUTH_REFRESH_TTL_SECS
+  jwtSigningKid: gt-main      # GT_JWT_RS256_SIGNING_KID
+  # Multi-tenant routing: set to a base Dolt URL (no db segment) to turn on
+  # per-tenant hq_<ws> routing; empty ⇒ single-tenant (compose default).
+  doltBaseUrl: ""
+
+# Daemon / API split (bead .4). The gt-mcp-server binary does NOT have a single
+# GT_RUN_DAEMONS gate TODAY — it unconditionally spawns the reaper, archive,
+# account-GC and drift-reconcile loops. The clean gate is a gt-core FOLLOW-UP.
+# Until then this chart approximates the split with the per-daemon OFF env vars
+# the binary DOES honour, and forward-wires GT_RUN_DAEMONS so the day the binary
+# learns it, the manifests already pass it.
+daemons:
+  # The dedicated singleton (replicas=1, never scaled) running the orchd binary +
+  # the in-process daemon loops. Modeled on compose `gt-orch-server`.
+  enabled: true
+  replicas: 1
+  # Set true once the gt-core follow-up lands a GT_RUN_DAEMONS gate.
+  envGateSupported: false
+  image:
+    repository: codecsrayo/gt-core-mcp-server
+    tag: embeddings
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  # orchd cost gate (compose: profile orchd, idle until a bead lands).
+  poolSize: 1
+  polecatMemMb: 1024
+  polecatMaxRestarts: 3
+  rig: hq
+  polecatPrefix: gt
+  rigGitUrl: https://github.com/gt-core-labs/gt-core.git
+  # Daemon cadence env. On the API pods these are forced to the OFF value so the
+  # singleton owns the only tick (no double-fire / races, bead .4).
+  reconcileTickSecs: 120        # GT_RECONCILE_TICK_SECS (singleton)
+  accountsGcTickSecs: 21600     # GT_ACCOUNTS_GC_TICK_SECS (singleton)
+  graphDriftTickSecs: 3600      # GT_GRAPH_DRIFT_TICK_SECS (singleton)
+  channelRoot: /var/lib/gt-core/.channels
+  dispatchChannel: dispatch
+  mergeReadyChannel: merge-ready
+  quotaFeedChannel: quota-feed
+
+# ---------------------------------------------------------------------------
+# Frontends (SSR, stateless)
+# ---------------------------------------------------------------------------
+web:
+  image:
+    repository: codecsrayo/gt-web
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 2
+  port: 3000
+
+docs:
+  image:
+    repository: codecsrayo/gt-docs
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 2
+  port: 3000
+
+# ---------------------------------------------------------------------------
+# Stateful backends (bead .3) — StatefulSets + headless Services + PVCs
+# ---------------------------------------------------------------------------
+# storageClass empty ⇒ cluster default. Talos: e.g. local-path or a CSI class.
+storageClass: ""
+
+postgres:
+  image:
+    repository: pgvector/pgvector
+    tag: pg16
+  user: gtapp
+  db: gtapp
+  port: 5432
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+
+dolt:
+  image:
+    repository: dolthub/dolt-sql-server
+    tag: latest
+  user: gtapp
+  port: 3307
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+
+minio:
+  image:
+    repository: minio/minio
+    tag: latest
+  initImage:
+    repository: minio/mc
+    tag: latest
+  apiPort: 9000
+  consolePort: 9001
+  bucket: gt-documents
+  region: us-east-1
+  storage: 20Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+# The event log is a file-based, single-writer store shared by the API and the
+# orchd singleton (compose: the gt-eventlog volume). RWX so both pods mount it;
+# on a single-node Talos this can stay RWO with the daemon+API co-scheduled, but
+# the safe default for the split is a RWX CSI class (e.g. a shared filesystem).
+eventlog:
+  storage: 10Gi
+  # ReadWriteMany when the API replicas AND the singleton share it; if the CSI
+  # class has no RWX, set apiSharesEventlog=false and co-locate (see README).
+  accessMode: ReadWriteMany
+# A separate volume for the per-rig knowledge graph output (/var/lib/gt-graph).
+graph:
+  storage: 5Gi
+  accessMode: ReadWriteMany
+
+# ---------------------------------------------------------------------------
+# Ingress (bead .2) — mirrors the compose Traefik path routing.
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  # traefik | nginx — selects annotations/priority semantics.
+  className: traefik
+  # TLS: with Traefik+cert-manager set tls.enabled and a clusterIssuer; the
+  # compose stack used ACME DNS-01 via Netlify which has no direct k8s analogue.
+  tls:
+    enabled: true
+    secretName: gt-tls
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Seed Job (bead — post-install/upgrade hook): runs DB schema bootstrap.
+# Live seeds (knowledge / IdP / rigs / quota) are filled by hq-greenfield-seeds
+# and are STUBBED here (the job only ensures schema, which the binary also does
+# on boot). See README.
+# ---------------------------------------------------------------------------
+seed:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# Secrets (bead .5). NEVER commit real values — supply via values-secret.yaml or
+# --set. Empty values render an empty Secret key; the chart documents which are
+# required for which feature (oauth, github app, admin seed).
+# ---------------------------------------------------------------------------
+secrets:
+  # If true, the chart renders a Secret from the values below. If false, the
+  # chart expects an externally-managed Secret named `<fullname>-secrets`
+  # (e.g. from sealed-secrets / external-secrets / SOPS).
+  create: true
+  # DB / object-store credentials (compose .env).
+  postgresPassword: ""        # POSTGRES_PASSWORD
+  minioRootUser: gtapp        # MINIO_ROOT_USER
+  minioRootPassword: ""       # MINIO_ROOT_PASSWORD
+  # AES-256-GCM master key sealing OAuth client secrets at rest (required when
+  # the image is built with the oauth feature). GT_SECRET_KEY.
+  secretKey: ""
+  # App OAuth callback URL + FE landing (only when oauth feature is built).
+  oidcRedirectUri: ""         # GT_OIDC_REDIRECT_URI
+  oauthFeRedirectUrl: ""      # GT_OAUTH_FE_REDIRECT_URL
+  # RS256 login keys (mirror ./secrets/jwt_private.pem + jwt_public.pem). PEM
+  # bodies; mounted into the pod at /run/secrets/jwt_{private,public}.pem.
+  jwtPrivateKey: ""           # GT_JWT_RS256_PRIVATE_KEY_FILE contents
+  jwtPublicKey: ""            # GT_JWT_RS256_KEYS contents
+  # Admin seed (argon2 upsert into ws_default.users scopes ["*"]). Both required
+  # or the binary skips the seed.
+  adminEmail: ""              # GT_ADMIN_EMAIL
+  adminPassword: ""           # GT_ADMIN_PASSWORD
+  # GitHub App (push webhook + JIT installation tokens for private rigs). Empty
+  # ⇒ the webhook + private-rig drift reconcile are off.
+  githubAppId: ""             # GT_GITHUB_APP_ID
+  githubAppPrivateKey: ""     # GT_GITHUB_APP_PRIVATE_KEY contents
+  githubAppWebhookSecret: ""  # GT_GITHUB_APP_WEBHOOK_SECRET
+  # Rig clone token for the orchd singleton (private repo). Empty ⇒ orchd boot
+  # clone fails (matches compose: set before bringing orchd up).
+  rigGitToken: ""             # GT_RIG_GIT_TOKEN

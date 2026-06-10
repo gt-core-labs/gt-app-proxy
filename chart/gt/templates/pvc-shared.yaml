@@ -1,0 +1,41 @@
+{{- $fullname := include "gt.fullname" . -}}
+# Shared file-based volumes (bead .3). The event log is a SINGLE-WRITER,
+# file-based store the API and the orchd singleton both mount (compose: the
+# gt-eventlog volume shared by gt-mcp-server + gt-orch-server). Channels,
+# heartbeats and onboarded accounts live here, so both pods must agree on it.
+#
+# Topology note (bead .3 caveat): file-based single-writer + N API replicas means
+# the volume needs ReadWriteMany so every pod can mount it. If the CSI class has
+# no RWX, set eventlog.accessMode=ReadWriteOnce and co-schedule all readers on one
+# node (single-node Talos), or keep the API at replicas=1. The actual WRITER of
+# the daemon ticks is the singleton; the API replicas read + append issue/feed
+# events.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-eventlog
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.eventlog.accessMode }}
+  {{- include "gt.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.eventlog.storage }}
+---
+# Per-rig knowledge-graph output (/var/lib/gt-graph). Separate from the event log
+# so graph rebuilds don't contend with the event-sourced domains.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-graph
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.graph.accessMode }}
+  {{- include "gt.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.graph.storage }}

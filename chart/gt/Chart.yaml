@@ -1,0 +1,22 @@
+apiVersion: v2
+name: gt
+description: |
+  The gt-core platform on Kubernetes (target: Talos). Mirrors the docker-compose
+  assembly in gt-app-proxy: stateful backends (Dolt, Postgres/pgvector, MinIO) as
+  StatefulSets+PVCs, the gt-mcp-server API as a probe-gated rolling-update
+  Deployment, a SINGLETON daemon Deployment (orchd + in-process reapers), the
+  gt-web + gt-docs SSR frontends, and an Ingress that replicates the Traefik path
+  routing. Replaces watchtower auto-deploy with GitOps + immutable tags.
+type: application
+# Chart version — bump on chart changes.
+version: 0.1.0
+# App version tracks the gt-core image channel deployed by default.
+appVersion: "embeddings"
+keywords:
+  - gt-core
+  - mcp
+  - talos
+  - gitops
+home: https://gt.codecsrayo.com
+maintainers:
+  - name: gt-core-labs

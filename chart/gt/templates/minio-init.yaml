@@ -1,0 +1,51 @@
+{{- $fullname := include "gt.fullname" . -}}
+# One-shot bucket creation (compose `minio-createbucket`). Idempotent: `mc mb
+# --ignore-existing` exits 0 if the bucket already exists. Runs as a post-install
+# /upgrade hook so it re-asserts the bucket on every release; retries until MinIO
+# is reachable, mirroring the compose entrypoint loop.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-minio-init
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "gt.selectorLabels" (dict "root" . "component" "minio-init") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "gt.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: mc
+          image: "{{ .Values.minio.initImage.repository }}:{{ .Values.minio.initImage.tag }}"
+          command: ["sh", "-c"]
+          args:
+            - |
+              until mc alias set local http://{{ $fullname }}-minio:{{ .Values.minio.apiPort }} "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+                echo "waiting for minio..."; sleep 2;
+              done
+              mc mb --ignore-existing "local/{{ .Values.minio.bucket }}"
+              echo "bucket ready: {{ .Values.minio.bucket }}"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
