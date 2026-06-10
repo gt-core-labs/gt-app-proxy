@@ -1,0 +1,71 @@
+# Flux alternative to the Argo CD Application (gitops/argocd/application.yaml).
+# Argo CD is the PRIMARY controller for this platform; this file documents the
+# equivalent Flux v2 wiring so the choice is reversible. Apply EITHER Argo OR
+# Flux, never both (they would fight over the same objects).
+#
+# Flux models the same thing as two objects:
+#   - a GitRepository  → the source (this repo, main).
+#   - a HelmRelease    → renders chart/gt from that source into namespace gt.
+# Reconciliation interval replaces Argo's webhook/poll; drift correction is on by
+# default. A deploy is still: bump the image tag in git → PR → merge → Flux syncs.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: gt-platform
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/gt-core-labs/gt-app-proxy.git
+  ref:
+    branch: main
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gt
+  namespace: gt
+spec:
+  interval: 5m
+  releaseName: gt
+  targetNamespace: gt
+  chart:
+    spec:
+      chart: chart/gt
+      sourceRef:
+        kind: GitRepository
+        name: gt-platform
+        namespace: flux-system
+  # selfHeal + remediation: a failed upgrade (e.g. a boot-broken image whose pods
+  # never go Ready) is retried then rolled back to the last good release — the
+  # probe gate keeps the old pods serving meanwhile.
+  upgrade:
+    remediation:
+      retries: 3
+  rollback:
+    enable: true
+  install:
+    remediation:
+      retries: 3
+  # Same deploy-controlled image-tag pins as the Argo valuesObject — bump these in
+  # a PR to deploy. Use immutable :<sha> tags (see gitops/README.md).
+  values:
+    mcpServer:
+      image:
+        tag: embeddings
+        pullPolicy: IfNotPresent
+    daemons:
+      image:
+        tag: embeddings
+        pullPolicy: IfNotPresent
+    web:
+      image:
+        tag: latest
+        pullPolicy: IfNotPresent
+    docs:
+      image:
+        tag: latest
+        pullPolicy: IfNotPresent
+    storageClass: ""
+    secrets:
+      create: false

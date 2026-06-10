@@ -1,0 +1,109 @@
+# Argo CD Application — the single source of truth that reconciles the gt-core
+# platform onto the Talos cluster from THIS git repo. It replaces watchtower:
+# instead of a daemon blindly pulling whatever moved under :embeddings/:latest,
+# Argo syncs the cluster to the Helm chart at chart/gt, and a deploy is an
+# auditable git change (bump the image tag below → open a PR → merge → Argo syncs).
+#
+# Epic hq-talos-migration / bead .6.
+#
+# WHY THIS SHAPE:
+#   - source.path = chart/gt          → the Helm chart authored in this repo (.2/.3/.4/.5).
+#   - source.targetRevision = main    → Argo reconciles to whatever main points at;
+#                                        a deploy is a commit to main (via PR).
+#   - syncPolicy.automated{selfHeal,prune} → drift back to git, GC removed objects.
+#   - the image tags under helm.valuesObject are the fields a DEPLOY PR bumps:
+#       mcpServer.image.tag / daemons.image.tag / web.image.tag / docs.image.tag.
+#     Pin them to IMMUTABLE tags (a release :<sha>, NOT the moving :embeddings/:latest
+#     that watchtower chased). See gitops/README.md for the immutable-tag follow-up
+#     required in the gt-core / gt-web docker-publish workflows.
+#
+# The rollout is gated by the chart's readiness/liveness probes + maxUnavailable:0,
+# so a boot-broken image (the .9 incident) never becomes Ready and never replaces a
+# healthy pod — Argo reports the Application Progressing/Degraded, prod stays up.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gt-platform
+  namespace: argocd
+  # Keep the Application around (and let Argo cascade-delete its children) only on
+  # explicit removal — never on a transient sync error.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: gt-core
+spec:
+  project: default
+
+  source:
+    # This repo. Replace with the manifests-repo URL if the chart is ever split out.
+    repoURL: https://github.com/gt-core-labs/gt-app-proxy.git
+    targetRevision: main
+    path: chart/gt
+    helm:
+      releaseName: gt
+      # values committed in chart/gt/values.yaml are the base; this block is the
+      # GitOps overlay — the deploy-controlled, environment-specific pins.
+      valuesObject:
+        # ---- IMMUTABLE IMAGE TAGS — the fields a deploy PR bumps. ----
+        # Replace `embeddings`/`latest` with a release :<sha> once gt-core / gt-web
+        # CI publishes per-sha tags (see README "Immutable-tag follow-up"). Until
+        # then these track the moving tags watchtower used — which is exactly the
+        # auditability gap GitOps closes; pin them ASAP.
+        mcpServer:
+          image:
+            tag: embeddings        # → codecsrayo/gt-core-mcp-server:<sha>
+            pullPolicy: IfNotPresent
+        daemons:
+          image:
+            tag: embeddings        # → codecsrayo/gt-core-mcp-server:<sha> (same image, singleton)
+            pullPolicy: IfNotPresent
+        web:
+          image:
+            tag: latest            # → codecsrayo/gt-web:<sha>
+            pullPolicy: IfNotPresent
+        docs:
+          image:
+            tag: latest            # → codecsrayo/gt-docs:<sha>
+            pullPolicy: IfNotPresent
+
+        # Cluster-specific wiring (override per environment).
+        storageClass: ""           # set to the Talos CSI class (e.g. local-path / longhorn)
+
+        # Secrets are NOT rendered from git. Manage them out-of-band
+        # (sealed-secrets / external-secrets / SOPS) and let the chart consume an
+        # externally-managed Secret named `gt-gt-secrets`.
+        secrets:
+          create: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gt
+
+  syncPolicy:
+    automated:
+      # Revert any out-of-band kubectl edit back to git (no manual drift).
+      selfHeal: true
+      # GC objects removed from the chart so deletes are real deploys too.
+      prune: true
+      # Don't prune everything if Argo briefly can't see the desired state.
+      allowEmpty: false
+    syncOptions:
+      # Argo creates the target namespace if absent.
+      - CreateNamespace=true
+      # Server-side apply: safer with large CRDs / strategic merge.
+      - ServerSideApply=true
+      # Prune in dependency order on delete.
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+
+  # Surface real drift only — ignore the replica count if an HPA owns it later.
+  ignoreDifferences: []
+
+  # Keep the last N synced revisions so a `git revert` rollback is fast and an
+  # operator can also roll back from the Argo UI/CLI if needed.
+  revisionHistoryLimit: 10
