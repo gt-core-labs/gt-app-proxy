@@ -16,11 +16,12 @@ authored in this repo — read each for the detail behind its step:
 
 > **Honest status.** This runbook is a *true* status of the migration, not
 > aspirational fiction. Steps that depend on beads not yet implemented are marked
-> **[PENDING]** / **[BLOCKED]** with the bead that unblocks them. In particular,
-> the platform comes up **bare** — admin + schema only — until
-> **hq-greenfield-seeds** lands (see [Step 6](#step-6--seeds--pending)). A
-> greenfield bring-up today gives you a running but unseeded platform; a
-> migration from prod (Step 5) carries the live state across instead.
+> **[PENDING]** / **[BLOCKED]** with the bead that unblocks them. **As of
+> hq-greenfield-seeds (SHIPPED), a greenfield bring-up comes up FUNCTIONAL** —
+> the knowledge/role-skills catalog, IdP/OAuth providers and rig catalog are
+> replayed as idempotent **boot seeds** at API boot (see
+> [Step 6](#step-6--seeds)). A migration from prod (Step 5) carries the live
+> state across instead and the boot seeds skip (empty-table gated).
 
 > **Authoring guardrail.** Nothing in this repo runs `talosctl` / `kubectl` /
 > the `migrate/` scripts as part of CI or by merging a branch. Every command
@@ -38,8 +39,8 @@ authored in this repo — read each for the detail behind its step:
 | 3 | Secrets → k8s Secret | ready | — |
 | 4 | Stateful services (StatefulSets) + verify PVCs | ready | — |
 | 5 | Data migration (prod → cluster) | ready (operator-run) | — |
-| 6 | **Live seeds** (knowledge / IdP / rigs / quota) | **STUBBED** | hq-greenfield-seeds [PENDING] |
-| 7 | Smoke verify | partially blocked by Step 6 | hq-greenfield-seeds |
+| 6 | **Live seeds** (knowledge / IdP / rigs at API boot; quota = operator) | **SHIPPED** (hq-greenfield-seeds) | — |
+| 7 | Smoke verify | ready | — |
 | 8 | Cutover (DNS + retire watchtower) | ready | — |
 | 9 | Rollback | ready | — |
 | — | Immutable per-sha image tags (GitOps target) | moving tags only | hq-talos-migration.9 [PENDING] |
@@ -172,8 +173,9 @@ helm install gt chart/gt -f values-secret.yaml --set storageClass=<your-csi-clas
 ```
 
 `-f values-secret.yaml` carries the secrets (Step 3) when `secrets.create=true`.
-The post-install hooks create the MinIO bucket + run the schema-bootstrap Job;
-the API rolls only once its pods pass `/healthz`.
+The post-install hooks create the MinIO bucket + gate on the stores; the API
+rolls only once its pods pass `/health` (schema + live seeds run at API boot —
+see [Step 6](#step-6--seeds)).
 
 ---
 
@@ -194,6 +196,7 @@ $EDITOR values-secret.yaml
 | `minioRootUser` / `minioRootPassword` | `MINIO_ROOT_USER/PASSWORD` | always |
 | `secretKey` | `GT_SECRET_KEY` | oauth-feature image builds (AES-GCM seal) |
 | `oidcRedirectUri` / `oauthFeRedirectUrl` | `GT_OIDC_REDIRECT_URI` / `GT_OAUTH_FE_REDIRECT_URL` | oauth builds |
+| `oauthSeedSecretGoogle` | `GT_OAUTH_SEED_SECRET_GOOGLE` | boot-seeded google provider (empty ⇒ google login skipped; seeded `enabled=false`) |
 | `jwtPrivateKey` / `jwtPublicKey` | RS256 login keys (PEM bodies of `secrets/jwt_*.pem`) | always (login) |
 | `adminEmail` / `adminPassword` | `GT_ADMIN_*` | admin seed (both or it skips) |
 | `githubAppId` / `githubAppPrivateKey` / `githubAppWebhookSecret` | `GT_GITHUB_APP_*` | GitHub App push webhook + private-rig JIT tokens |
@@ -239,21 +242,21 @@ store the API and the singleton daemon both mount. Default
 co-scheduled with the singleton — see
 [`chart/gt/README.md`](chart/gt/README.md) §"Stateful topology".
 
-**API/daemon split caveat (bead .4).** The gt-mcp-server binary does **not** yet
-honour a single `GT_RUN_DAEMONS` gate; it unconditionally spawns its daemon
-loops. The chart forward-wires `GT_RUN_DAEMONS=0` on the API tier and `=1` on the
-singleton, plus the per-loop OFF env vars the binary *does* honour today. Until
-the gt-core follow-up lands, the reaper + archive loops still tick on the API
-replicas — **a known race; do not scale the API past 1 in prod before that
-follow-up.** Detail in [`chart/gt/README.md`](chart/gt/README.md) §"API vs daemon
-split".
+**API/daemon split (bead .4).** The gt-mcp-server binary honours a single
+`GT_RUN_DAEMONS` gate (default ON; `=0` disables every singleton daemon loop).
+The chart sets `GT_RUN_DAEMONS=0` on the API tier and `=1` on the singleton, so
+exactly one pod ticks the reaper / archive / drift-reconcile / account-GC /
+convoy→scheduler / quota-rotation loops. **The API may scale to N replicas
+safely** — none of them tick a singleton loop, and the boot seeds (not daemons)
+are idempotent so racing replicas don't double-seed. Detail in
+[`chart/gt/README.md`](chart/gt/README.md) §"API vs daemon split".
 
 ---
 
 ## Step 5 — Data migration (prod → cluster)  *(migration path only)*
 
 > Skip this entire step for a **greenfield** bring-up with no prior data — go to
-> [Step 6](#step-6--seeds--pending) and rely on seeds. Do this step only when
+> [Step 6](#step-6--seeds) and rely on seeds. Do this step only when
 > migrating the **existing prod compose stack** onto the new cluster.
 
 Full detail + per-store verification: [`migrate/README.md`](migrate/README.md).
@@ -290,64 +293,66 @@ mismatch — do NOT cut over if any verify fails.**
 
 ---
 
-## Step 6 — Seeds  **[PENDING]**
+## Step 6 — Seeds
 
-> **[BLOCKED] hq-greenfield-seeds** — live seeds are **NOT yet implemented**. On
-> a greenfield cluster the platform comes up **bare** (admin + schema only).
-> Track the sub-beads:
-> - **.2 knowledge** — role prompts + skill bodies + role→skill scope bindings
-> - **.3 IdP / App** — OAuth/OIDC providers, GitHub App registration
-> - **.4 quota** — Claude account registry (per-account `CLAUDE_CONFIG_DIR`)
-> - **.5 rigs** — registered rigs (`rig_add`)
+> **hq-greenfield-seeds — SHIPPED.** The live-curated platform state is now
+> reproducible as **boot seeds** that run at **API boot** inside `gt-mcp-server` —
+> NOT via the seed Job, NOT manually. Each is idempotent (gated on its
+> table/catalog being EMPTY), so a greenfield cluster comes up **functional** and
+> a migration (Step 5) leaves the carried-across state untouched (seeds skip).
 
-**What seeds itself today (idempotent, by the binary on boot — no action):**
-the PG migration array (auth/rig/vcs/quota/docs/notifications/workspace/memory),
-`seed_admin` (from `GT_ADMIN_EMAIL` / `GT_ADMIN_PASSWORD`), the default workspace
-+ template, the role/skill **catalog** (names only — *not* the prompt/skill
-*bodies*), RBAC guard hooks, Dolt `ensure_database`/`ensure_schema`, and the
-MinIO `gt-documents` bucket.
+**Seeds that run at API boot (idempotent — no operator action):**
 
-**What is the GAP (was applied LIVE in prod via REST/manual, does NOT reproduce):**
-role prompt *text* + skill *bodies* + `role.scopes` bindings, OAuth/IdP
-providers, Claude quota accounts, the GitHub App, and registered rigs. These are
-exactly the sub-beads above.
+| Seed | Requires | Notes |
+| --- | --- | --- |
+| PG migration array + Dolt `ensure_database`/`ensure_schema` | — | always |
+| Global admin (`seed_admin`) | `GT_ADMIN_EMAIL` + `GT_ADMIN_PASSWORD` | both or it skips |
+| Default workspace + template | — | always |
+| Role / skills **catalog** (knowledge: prompts + skill bodies + role→skill scope bindings) | — | empty-catalog gated |
+| IdP / OAuth providers (e.g. `google`) | `GT_SECRET_KEY` + `GT_OAUTH_SEED_SECRET_GOOGLE` | empty-table gated; seeded provider `enabled=false` until an admin enables it; unset secret ⇒ that provider skipped |
+| Rig catalog (`gt`/`gt_core`/`gtmcp`/`gtproxy`/`gtweb`) | — | empty-table gated |
+| RBAC guard hooks + MinIO `gt-documents` bucket | — | always |
 
-**The seam where they will run.** The chart's seed Job
-(`chart/gt/templates/seed-job.yaml`, a post-install/upgrade hook) currently only
-waits for the stores and lets the binary bootstrap schema — the live-seed step is
-an explicit **STUB**. When hq-greenfield-seeds lands, replace that stub with its
-seed command (a `gt` / REST invocation against the in-cluster API) and the
-greenfield bring-up becomes complete.
+**The one NON-boot seed — quota Claude accounts.** Per-account `CLAUDE_CONFIG_DIR`
+credential dirs are provisioned by an **operator** under `GT_CLAUDE_ACCOUNTS_ROOT`
+(chart `daemons.claudeAccountsRoot`, defaults to `<eventlog>/accounts` on the
+shared eventlog PVC) via the onboarding REST surface / `quota.register`. The
+rotation daemon (singleton) rebuilds its keychain from that root on (re)start.
+See gt-core `docs/ops/greenfield-seeds.md` §4.4.
 
-Until then: after Step 4/5, apply the live state **manually** the same way prod
-got it (REST against the API for prompts/scopes/IdP/rigs; `quota.register` for
-accounts) — i.e. the migration path (Step 5) is the only way to get a *fully*
-functional platform today, because it carries that live state across.
+**The seed Job is only a readiness gate.** `chart/gt/templates/seed-job.yaml`
+(post-install/upgrade hook) waits for Dolt + Postgres so the first API pod boots
+against ready stores. It deliberately does **not** run the live seeds — those run
+at API boot and are empty-table gated, so a Job seed would only fight that gate.
+
+**Canonical detail:** gt-core `docs/ops/greenfield-seeds.md` (secrets matrix §3,
+per-seed §4.x) and the bring-up runbook `docs/ops/greenfield-bringup.md`.
 
 ---
 
 ## Step 7 — Verify (smoke checklist)
 
-> Items that depend on **hq-greenfield-seeds** ([Step 6](#step-6--seeds--pending))
-> will FAIL on a greenfield cluster until that epic lands or the state is applied
-> manually. They PASS on a migration (Step 5) because the data came across.
+> The seed-dependent checks PASS on a greenfield cluster (the boot seeds ran —
+> [Step 6](#step-6--seeds)) and on a migration (Step 5 carried the state across).
+> The one exception is **Quota**, which needs an operator to provision the Claude
+> account dirs (not a boot seed).
 
 Cross-reference the canonical greenfield smoke checklist: **gt-core
-`docs/ops/greenfield-seeds.md` §6** — **[PENDING]**: that doc is produced by
-hq-greenfield-seeds and does not exist yet. Use this interim list:
+`docs/ops/greenfield-seeds.md` §6** and the step-by-step bring-up runbook
+`docs/ops/greenfield-bringup.md` (both shipped). Interim cluster-side list:
 
-| Check | How | Depends on seeds? |
+| Check | How | Source |
 | --- | --- | --- |
-| API health | `kubectl -n gt port-forward svc/gt-mcp-server 8765:8765`; `curl localhost:8765/healthz` | no |
-| Admin login | log in as `GT_ADMIN_EMAIL` via the FE | no |
-| Default workspace | workspace list shows the default ws | no |
-| MCP reachable | `curl .../mcp` handshake; `mcp__gt__ping` | no |
-| Tracker | `issues.list` returns beads | needs migrated/seeded Dolt |
-| Roles w/ prompt + scopes | a role session loads its prompt + can mutate per its scopes | **yes (.2)** |
-| IdP / OAuth providers | `/admin/providers` lists the configured providers | **yes (.3)** |
-| GitHub App | push webhook marks a rig stale; private-rig JIT clone works | **yes (.3)** |
-| Rigs | `rig.list` shows the registered rigs | **yes (.5)** |
-| Quota | `quota.list` shows Claude accounts; rotation can fire | **yes (.4)** |
+| API health | `kubectl -n gt port-forward svc/gt-mcp-server 8765:8765`; `curl localhost:8765/health` | always |
+| Admin login | log in as `GT_ADMIN_EMAIL` via the FE | admin seed |
+| Default workspace | workspace list shows the default ws | boot |
+| MCP reachable | full MCP session (`initialize` + SSE), then e.g. `ping` / `issues_list_execute` — NOT a bare `curl tools/call` (422s) | always |
+| Tracker | `issues_list_execute` returns beads | migrated/seeded Dolt |
+| Roles w/ prompt + scopes | `GET /api/v1/skills` shows the role→skill bindings; a role session loads its prompt + can mutate per its scopes | boot seed (knowledge) |
+| IdP / OAuth providers | `/admin/providers` lists the seeded providers (e.g. google, `enabled=false`) | boot seed (needs `GT_OAUTH_SEED_SECRET_GOOGLE`) |
+| GitHub App | push webhook marks a rig stale; private-rig JIT clone works | `GT_GITHUB_APP_*` secrets |
+| Rigs | `rig_list` shows the seeded rigs | boot seed |
+| Quota | `quota_list` shows Claude accounts; rotation can fire | **operator-provisioned** (not a boot seed) |
 
 ---
 
@@ -362,7 +367,7 @@ kubectl -n gt scale deploy/gt-api --replicas=2 deploy/gt-daemons --replicas=1
 
 # 2. Point DNS / the Ingress at the cluster. The chart's Ingress
 #    (chart/gt/templates/ingress.yaml) replicates the compose Traefik routing:
-#      /auth /api /mcp /stream /openapi.json /healthz /.well-known → mcp-server:8765
+#      /auth /api /mcp /stream /openapi.json /health /.well-known → mcp-server:8765
 #      /docs /share                                                → gt-docs:3000
 #      /                                                            → gt-web:3000 (catch-all)
 #    TLS via cert-manager (the compose ACME-DNS-01-via-Netlify resolver has no

@@ -68,19 +68,17 @@ mcpServer:
   # per-tenant hq_<ws> routing; empty ⇒ single-tenant (compose default).
   doltBaseUrl: ""
 
-# Daemon / API split (bead .4). The gt-mcp-server binary does NOT have a single
-# GT_RUN_DAEMONS gate TODAY — it unconditionally spawns the reaper, archive,
-# account-GC and drift-reconcile loops. The clean gate is a gt-core FOLLOW-UP.
-# Until then this chart approximates the split with the per-daemon OFF env vars
-# the binary DOES honour, and forward-wires GT_RUN_DAEMONS so the day the binary
-# learns it, the manifests already pass it.
+# Daemon / API split (bead .4). The gt-mcp-server binary HAS a single
+# GT_RUN_DAEMONS gate (default ON; `=0` disables every singleton daemon loop —
+# reaper, archive, account-GC, drift-reconcile, convoy→scheduler, quota
+# rotation). The chart sets GT_RUN_DAEMONS=0 on the API tier and =1 on the
+# singleton so exactly one pod ticks. The per-daemon cadence env below (*_TICK_SECS)
+# stays as defense-in-depth / cadence control on the singleton.
 daemons:
   # The dedicated singleton (replicas=1, never scaled) running the orchd binary +
   # the in-process daemon loops. Modeled on compose `gt-orch-server`.
   enabled: true
   replicas: 1
-  # Set true once the gt-core follow-up lands a GT_RUN_DAEMONS gate.
-  envGateSupported: false
   image:
     repository: codecsrayo/gt-core-mcp-server
     tag: embeddings
@@ -107,6 +105,12 @@ daemons:
   dispatchChannel: dispatch
   mergeReadyChannel: merge-ready
   quotaFeedChannel: quota-feed
+  # Claude accounts root (GT_CLAUDE_ACCOUNTS_ROOT). The quota onboarding flow + the
+  # rotation daemon read/write per-account credential dirs here; it MUST resolve to
+  # the same path on the API tier and the singleton (both mount the eventlog PVC at
+  # /var/lib/gt-core). Default keeps it on the shared volume so a dir written by the
+  # onboarding REST surface (API pod) is seen by the rotation daemon (singleton).
+  claudeAccountsRoot: /var/lib/gt-core/accounts
 
 # ---------------------------------------------------------------------------
 # Frontends (SSR, stateless)
@@ -204,10 +208,11 @@ ingress:
   annotations: {}
 
 # ---------------------------------------------------------------------------
-# Seed Job (bead — post-install/upgrade hook): runs DB schema bootstrap.
-# Live seeds (knowledge / IdP / rigs / quota) are filled by hq-greenfield-seeds
-# and are STUBBED here (the job only ensures schema, which the binary also does
-# on boot). See README.
+# Seed Job (bead — post-install/upgrade hook): a pure pre-roll readiness gate that
+# waits for Dolt + Postgres before the API pods boot. Schema bootstrap AND the live
+# seeds (knowledge/role-skills catalog, IdP/OAuth providers, rig catalog) run at API
+# BOOT inside gt-mcp-server, idempotently — NOT in this Job (epic hq-greenfield-seeds,
+# shipped). See README "Greenfield seeds".
 # ---------------------------------------------------------------------------
 seed:
   enabled: true
@@ -232,6 +237,14 @@ secrets:
   # App OAuth callback URL + FE landing (only when oauth feature is built).
   oidcRedirectUri: ""         # GT_OIDC_REDIRECT_URI
   oauthFeRedirectUrl: ""      # GT_OAUTH_FE_REDIRECT_URL
+  # Cleartext OAuth client_secret for the boot-seeded `google` provider
+  # (GT_OAUTH_SEED_SECRET_GOOGLE). The provider config is seeded at API boot from
+  # the embedded non-secret extract; the seed reads this cleartext secret and
+  # AES-256-GCM seals it under GT_SECRET_KEY. Empty ⇒ the google provider is
+  # skipped cleanly at boot (no login button). The seeded provider is enabled=false
+  # until an admin enables it in /admin/providers. See gt-core
+  # docs/ops/greenfield-seeds.md §3 + §4.2.
+  oauthSeedSecretGoogle: ""   # GT_OAUTH_SEED_SECRET_GOOGLE
   # RS256 login keys (mirror ./secrets/jwt_private.pem + jwt_public.pem). PEM
   # bodies; mounted into the pod at /run/secrets/jwt_{private,public}.pem.
   jwtPrivateKey: ""           # GT_JWT_RS256_PRIVATE_KEY_FILE contents

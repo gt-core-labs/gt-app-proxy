@@ -1,6 +1,6 @@
 {{- $fullname := include "gt.fullname" . -}}
 # gt-mcp-server API tier (bead .2 + .4). STATELESS, N replicas. Readiness +
-# liveness probes on /healthz gate the rolling update (maxUnavailable 0): a pod
+# liveness probes on /health gate the rolling update (maxUnavailable 0): a pod
 # that panics at boot never becomes Ready, so it never receives traffic and never
 # replaces a healthy pod — the exact failure mode the .9 watchtower auto-deploy
 # caused (blind recreate → crash loop → manual rollback) is now structurally
@@ -8,13 +8,11 @@
 # manual docker recreate.
 #
 # DAEMON SPLIT (bead .4): the API replicas must NOT run the singleton daemon
-# loops (double tick / races across N pods). The gt-mcp-server binary has no
-# single GT_RUN_DAEMONS gate TODAY, so this Deployment forces every per-daemon
-# loop the binary DOES gate to its OFF value, and sets GT_RUN_DAEMONS=0
-# forward-compat for the planned gt-core follow-up. Loops with no off-switch
-# today (the interactive session reaper; the archive daemon) still spawn on the
-# API pods until the follow-up lands — documented in the chart README as the
-# remaining gt-core change for a clean split.
+# loops (double tick / races across N pods). The gt-mcp-server binary HAS a single
+# GT_RUN_DAEMONS gate (default ON; `=0` disables every daemon loop), so this
+# Deployment sets GT_RUN_DAEMONS=0 — the API pods serve requests and seed at boot
+# but never tick a singleton loop. The per-daemon *_TICK_SECS=0 below stay as
+# defense-in-depth.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -94,26 +92,36 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_GITHUB_APP_WEBHOOK_SECRET } }
             - name: GT_GITHUB_APP_PRIVATE_KEY_FILE
               value: /run/secrets/github_app_private_key.pem
+            # Cleartext client_secret for the boot-seeded `google` OAuth provider
+            # (seed_oauth_providers reads this at API boot, seals it under
+            # GT_SECRET_KEY; empty ⇒ provider skipped). The seed runs on the API
+            # tier because boot seeds are NOT daemons (not gated by GT_RUN_DAEMONS).
+            - name: GT_OAUTH_SEED_SECRET_GOOGLE
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_OAUTH_SEED_SECRET_GOOGLE } }
+            # Claude accounts root — same path the singleton uses so a dir written
+            # by the onboarding REST surface here is read by the rotation daemon.
+            - name: GT_CLAUDE_ACCOUNTS_ROOT
+              value: {{ .Values.daemons.claudeAccountsRoot | quote }}
             # --- DAEMON OFF gate on the API tier (bead .4) ---
             - name: GT_RUN_DAEMONS
-              value: "0"                       # forward-compat for the gt-core follow-up
+              value: "0"                       # single gate: API pods never tick a singleton loop
             - name: GT_GRAPH_DRIFT_TICK_SECS
-              value: "0"                       # honoured today → drift-reconcile off
+              value: "0"                       # defense-in-depth → drift-reconcile off
             - name: GT_ACCOUNTS_GC_TICK_SECS
-              value: "0"                       # honoured today → account GC off
+              value: "0"                       # defense-in-depth → account GC off
           ports:
             - name: http
               containerPort: 8765
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: 8765
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: 8765
             initialDelaySeconds: 30
             periodSeconds: 20

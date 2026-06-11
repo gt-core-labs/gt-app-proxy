@@ -8,10 +8,16 @@
 # readiness wait on Dolt + Postgres so the first API pod boots against ready
 # stores.
 #
-# LIVE SEEDS ARE STUBBED here pending hq-greenfield-seeds: the knowledge prompts,
-# IdP/OAuth providers, rig catalog and quota accounts are NOT seeded by this Job.
-# When hq-greenfield-seeds lands, replace the placeholder below with its seed
-# command (a `gt`/REST invocation against the in-cluster API).
+# LIVE SEEDS RUN AT API BOOT, not here (epic hq-greenfield-seeds, SHIPPED). The
+# knowledge/role-skills catalog, IdP/OAuth providers and rig catalog are replayed
+# by gt-mcp-server on boot — each idempotent (gated on its table/catalog being
+# EMPTY) and secret-gated where needed (GT_SECRET_KEY + GT_OAUTH_SEED_SECRET_*).
+# So this Job must NOT seed them: doing so would either double-seed or fight the
+# empty-table gate. It stays a pure pre-roll readiness gate (Dolt + Postgres up)
+# so the first API pod boots against ready stores. Quota Claude accounts are the
+# one NON-boot seed (operator-provisioned credential dirs under
+# GT_CLAUDE_ACCOUNTS_ROOT — see gt-core docs/ops/greenfield-seeds.md §4.4); they
+# are intentionally not wired here either.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -52,10 +58,10 @@ spec:
                 fi
                 echo "[seed] stores not ready yet ($i)"; sleep 2
               done
-              # Schema bootstrap is performed by the gt-mcp-server binary on boot
-              # (ensure_database + ensure_schema + PG migration array). No explicit
-              # migrate subcommand to invoke here.
-              # STUB (hq-greenfield-seeds): live seeds (knowledge/IdP/rigs/quota)
-              # are filled by that epic — wire its seed command here when it lands.
-              echo "[seed] done (schema bootstrapped by API boot; live seeds pending hq-greenfield-seeds)"
+              # Schema bootstrap AND live seeds (knowledge/IdP/rigs) are performed
+              # by the gt-mcp-server binary on boot (ensure_database + ensure_schema
+              # + PG migration array; seed_oauth_providers + seed_rigs + the
+              # role-skills catalog seed, all idempotent on an empty table/catalog).
+              # Nothing to invoke here — this Job only gates on the stores.
+              echo "[seed] done (schema + live seeds run at API boot — hq-greenfield-seeds)"
 {{- end -}}

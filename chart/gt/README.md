@@ -27,8 +27,9 @@ cp chart/gt/values-secret.yaml.example values-secret.yaml   # then edit
 helm install gt chart/gt -f values-secret.yaml \
   --set storageClass=<your-csi-class>
 
-# 4. Done. The post-install hooks create the MinIO bucket + run schema bootstrap;
-#    the API rolls only once its pods pass /healthz.
+# 4. Done. The post-install hooks create the MinIO bucket + gate on the stores;
+#    the API rolls only once its pods pass /health (schema + live seeds run at
+#    API boot — see "Greenfield seeds" below).
 ```
 
 > This chart never deploys itself — it is rendered + applied by your GitOps
@@ -53,7 +54,7 @@ helm install gt chart/gt -f values-secret.yaml \
 
 Ingress path routing (compose Traefik priorities → longest-prefix Ingress):
 
-- `/auth /api /mcp /stream /openapi.json /healthz /health /.well-known` → `mcp-server:8765` (was priority 100)
+- `/auth /api /mcp /stream /openapi.json /health /.well-known` → `mcp-server:8765` (was priority 100)
 - `/docs /share` → `gt-docs:3000` (was priority 50)
 - `/` → `gt-web:3000` (catch-all, was priority 1)
 
@@ -65,25 +66,24 @@ in-process daemon loops (interactive session reaper, archive sweep,
 drift-reconcile, account GC, convoy→scheduler bridge, quota rotation) that MUST
 have exactly one ticker or they double-fire and race.
 
-**The env gate today (important):** the `gt-mcp-server` binary does **not** have
-a single `GT_RUN_DAEMONS` switch. It unconditionally `tokio::spawn`s its daemon
-loops. Some loops have an individual off-switch the chart uses on the API tier:
+**The env gate:** the `gt-mcp-server` binary HAS a single `GT_RUN_DAEMONS` switch
+(`should_run_daemons`, gt-mcp-server.rs): **default ON**, and an explicit
+`GT_RUN_DAEMONS=0` turns **every** singleton daemon loop off (reaper, archive
+sweep, graph drift-reconcile, account-dir GC, convoy→scheduler bridge, quota
+rotation). This chart wires it directly:
 
-| loop                       | off-switch the binary honours today          | set on API? |
-| -------------------------- | --------------------------------------------- | ----------- |
-| graph drift-reconcile      | `GT_GRAPH_DRIFT_TICK_SECS=0`                  | ✅ yes      |
-| account-dir GC             | `GT_ACCOUNTS_GC_TICK_SECS=0`                  | ✅ yes      |
-| interactive session reaper | *(none — `GT_RECONCILE_TICK_SECS` is cadence only)* | ⚠️ still spawns |
-| archive daemon             | *(none — only `system_config.json enabled=false`)*  | ⚠️ still spawns |
+| pod                | `GT_RUN_DAEMONS` | effect                                     |
+| ------------------ | ---------------- | ------------------------------------------ |
+| API (`mcp-server`) | `0`              | serves requests + runs boot seeds; ticks no daemon loop |
+| singleton (`orchd`)| `1`              | owns every daemon tick                      |
 
-So a **clean** split needs a **gt-core follow-up**: add a `GT_RUN_DAEMONS`
-(default `1`) env that gates every loop, so the API pods set `GT_RUN_DAEMONS=0`.
-This chart **already wires `GT_RUN_DAEMONS=0` on the API and `=1` on the
-singleton**, so the day that follow-up ships, the manifests need no change. Until
-then the reaper + archive loops still run on the API replicas; with 2 API
-replicas + 1 singleton that is 3 reaper/archive tickers (low-frequency, mostly
-benign, but a known race the follow-up closes). File the follow-up as a
-`gt-composition` bead before scaling the API past 1 in prod.
+The per-daemon cadence env on the API tier (`GT_GRAPH_DRIFT_TICK_SECS=0`,
+`GT_ACCOUNTS_GC_TICK_SECS=0`) is kept as defense-in-depth but is redundant given
+the single gate. **The API may scale to N replicas safely** — none of them tick a
+singleton loop. Note: the **boot seeds** (knowledge/IdP/rigs catalog) are NOT
+daemons and are NOT gated by `GT_RUN_DAEMONS`; they run on every API boot and are
+idempotent (empty-table/empty-catalog gated), so N replicas racing to seed is
+safe — the first wins, the rest skip.
 
 ## Non-root / fsGroup (bead .5) — obsoletes .10 / .11
 
@@ -126,19 +126,36 @@ For GitOps prefer **sealed-secrets / external-secrets / SOPS**: set
 Keys mirror the compose `.env` + `./secrets/*` files: `postgresPassword`,
 `minioRootPassword`, `secretKey` (GT_SECRET_KEY, oauth builds), `jwtPrivateKey` /
 `jwtPublicKey` (the `secrets/jwt_*.pem` bodies), `adminEmail` / `adminPassword`
-(admin seed), `githubAppId` / `githubAppPrivateKey` / `githubAppWebhookSecret`
+(admin seed), `oauthSeedSecretGoogle` (GT_OAUTH_SEED_SECRET_GOOGLE — cleartext
+client_secret for the boot-seeded google provider; empty ⇒ that login button is
+skipped), `githubAppId` / `githubAppPrivateKey` / `githubAppWebhookSecret`
 (GitHub App push webhook + private-rig drift reconcile), `rigGitToken` (orchd rig
 clone). See `values.yaml` for the per-key feature notes.
 
-## Greenfield seeds dependency
+## Greenfield seeds
 
-The `seed` Job (post-install/upgrade hook) currently only waits for the stores
-and relies on the API binary's boot-time schema bootstrap (`ensure_database` +
-`ensure_schema` + the PG migration array). **Live seeds are STUBBED** — the
-knowledge prompts, IdP/OAuth providers, rig catalog and quota accounts are filled
-by epic **hq-greenfield-seeds**. When it lands, replace the placeholder in
-`templates/seed-job.yaml` with its seed command (a `gt`/REST call against the
-in-cluster API).
+Epic **hq-greenfield-seeds** (shipped) made the platform's live-curated state into
+reproducible **boot seeds** that run at **API boot** inside `gt-mcp-server` —
+**not** via the `seed` Job, and **not** manually. Each is idempotent (gated on its
+table/catalog being EMPTY, so it never clobbers a curated prod):
+
+| seed                              | runs at      | requires                                              |
+| --------------------------------- | ------------ | ---------------------------------------------------- |
+| Global admin                      | API boot     | `GT_ADMIN_EMAIL` + `GT_ADMIN_PASSWORD`               |
+| Role / skills catalog (knowledge) | API boot     | — (always; empty-catalog gated)                      |
+| IdP/OAuth providers (e.g. google) | API boot     | `GT_SECRET_KEY` + `GT_OAUTH_SEED_SECRET_<ID>` (e.g. `GT_OAUTH_SEED_SECRET_GOOGLE`); empty-table gated. Seeded provider is `enabled=false` until an admin enables it. |
+| Rig catalog                       | API boot     | — (always; empty-table gated)                        |
+
+The `seed` Job (post-install/upgrade hook) is therefore only a **pre-roll
+readiness gate**: it waits for Dolt + Postgres so the first API pod boots against
+ready stores. It deliberately does NOT run the live seeds — doing so would fight
+the empty-table gate / double-seed.
+
+**Quota Claude accounts** are the one NON-boot seed: an operator provisions
+per-account credential dirs under `GT_CLAUDE_ACCOUNTS_ROOT` (defaults to
+`<eventlog>/accounts`, on the shared eventlog PVC so both the onboarding REST
+surface on the API tier and the rotation daemon on the singleton see the same
+dirs). See gt-core `docs/ops/greenfield-seeds.md` §3 (secrets matrix) + §4.4.
 
 ## Verify (no cluster)
 

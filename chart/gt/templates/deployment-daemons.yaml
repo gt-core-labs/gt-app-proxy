@@ -64,7 +64,7 @@ spec:
               value: "postgres://$(GT_PG_USER):$(POSTGRES_PASSWORD)@$(GT_PG_HOST):$(GT_PG_PORT)/$(GT_PG_DB)"
             # --- DAEMON ON gate on the singleton (bead .4): this pod owns every tick ---
             - name: GT_RUN_DAEMONS
-              value: "1"                       # forward-compat for the gt-core follow-up
+              value: "1"                       # single gate ON: this pod owns every singleton loop
             - name: GT_RECONCILE_TICK_SECS
               value: {{ .Values.daemons.reconcileTickSecs | quote }}
             - name: GT_ACCOUNTS_GC_TICK_SECS
@@ -99,7 +99,7 @@ spec:
             - name: GT_HEARTBEAT_DIR
               value: /var/lib/gt-core/.heartbeats
             - name: GT_CLAUDE_ACCOUNTS_ROOT
-              value: /var/lib/gt-core/accounts
+              value: {{ .Values.daemons.claudeAccountsRoot | quote }}
             - name: GT_METRICS_BIND
               value: 0.0.0.0:9099
             - name: GT_RIG_GIT_URL
