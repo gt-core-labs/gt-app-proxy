@@ -46,6 +46,12 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.web.port }}
+          # Drain window: endpoint removal is async to SIGTERM — serve briefly
+          # after termination starts so rollouts don't drop in-flight requests.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "8"]
           readinessProbe:
             httpGet:
               path: /
