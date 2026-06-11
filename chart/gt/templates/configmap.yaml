@@ -6,6 +6,11 @@ metadata:
   labels:
     {{- include "gt.labels" . | nindent 4 }}
 data:
+  # Non-root runtime: skip the entrypoint's gt self-update (can't write
+  # /usr/local/bin as uid 1000; the baked binary IS the built one) and give a
+  # writable HOME so any ~ writes land in the rootfs tmp, not unwritable /.
+  GT_SKIP_UPDATE: "1"
+  HOME: "/tmp"
   # --- Listen / identity ---
   GT_MCP_HTTP_BIND: "0.0.0.0:8765"
   GT_MCP_ACTOR: {{ .Values.mcpServer.actor | quote }}

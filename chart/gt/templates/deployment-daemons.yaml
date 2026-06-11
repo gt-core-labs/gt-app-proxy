@@ -30,6 +30,10 @@ spec:
       labels:
         {{- include "gt.selectorLabels" (dict "root" . "component" "orchd") | nindent 8 }}
     spec:
+      # App mounts its Secret at /run/secrets; on debian (/var/run -> /run) the
+      # k8s SA-token automount at /var/run/secrets/kubernetes.io collides with
+      # that read-only mount and runc fails. The app doesn't call the k8s API.
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

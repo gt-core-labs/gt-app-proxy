@@ -44,6 +44,11 @@ spec:
       containers:
         - name: dolt
           image: "{{ .Values.dolt.image.repository }}:{{ .Values.dolt.image.tag }}"
+          # Non-root (uid 1000) needs a writable HOME for dolt's global config
+          # (~/.dolt); HOME=/ is unwritable. Point it at the fsGroup-owned data PVC.
+          env:
+            - name: HOME
+              value: /var/lib/dolt
           # Mirror the compose entrypoint: ensure the wire user, then serve.
           command: ["sh", "-c"]
           args:
