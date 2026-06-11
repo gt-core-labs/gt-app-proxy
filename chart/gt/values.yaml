@@ -61,7 +61,7 @@ mcpServer:
   scopeProfile: dev           # GT_MCP_SCOPE_PROFILE
   actor: mcp-local            # GT_MCP_ACTOR
   rustLog: info               # RUST_LOG
-  authAccessTtlSecs: 900      # GT_AUTH_ACCESS_TTL_SECS
+  authAccessTtlSecs: 172800   # GT_AUTH_ACCESS_TTL_SECS (48h)
   authRefreshTtlSecs: 2592000 # GT_AUTH_REFRESH_TTL_SECS
   jwtSigningKid: gt-main      # GT_JWT_RS256_SIGNING_KID
   # Multi-tenant routing: set to a base Dolt URL (no db segment) to turn on
