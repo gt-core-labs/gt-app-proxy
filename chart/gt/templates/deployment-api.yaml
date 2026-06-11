@@ -86,12 +86,25 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_ADMIN_EMAIL } }
             - name: GT_ADMIN_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_ADMIN_PASSWORD } }
+            # GitHub App (push webhook + private-rig JIT tokens). Rendered ONLY
+            # when an App id is configured: GithubAppConfig::from_env treats a
+            # set-but-empty GT_GITHUB_APP_ID as "half-set" and PANICS at boot
+            # (gt-vcs github.rs), so empty placeholders must not reach the env.
+            # When set, from_env also hard-requires the slug and the key FILE;
+            # the webhook secret is consumed via *_FILE too (the inline form is
+            # read by nothing).
+            {{- if .Values.secrets.githubAppId }}
             - name: GT_GITHUB_APP_ID
               valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_GITHUB_APP_ID } }
-            - name: GT_GITHUB_APP_WEBHOOK_SECRET
-              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_GITHUB_APP_WEBHOOK_SECRET } }
+            - name: GT_GITHUB_APP_SLUG
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_GITHUB_APP_SLUG } }
             - name: GT_GITHUB_APP_PRIVATE_KEY_FILE
               value: /run/secrets/github_app_private_key.pem
+            {{- if .Values.secrets.githubAppWebhookSecret }}
+            - name: GT_GITHUB_APP_WEBHOOK_SECRET_FILE
+              value: /run/secrets/github_app_webhook_secret
+            {{- end }}
+            {{- end }}
             # Cleartext client_secret for the boot-seeded `google` OAuth provider
             # (seed_oauth_providers reads this at API boot, seals it under
             # GT_SECRET_KEY; empty ⇒ provider skipped). The seed runs on the API
@@ -151,8 +164,14 @@ spec:
                 path: jwt_private.pem
               - key: jwt_public.pem
                 path: jwt_public.pem
+              {{- if .Values.secrets.githubAppId }}
               - key: github_app_private_key.pem
                 path: github_app_private_key.pem
+              {{- if .Values.secrets.githubAppWebhookSecret }}
+              - key: github_app_webhook_secret
+                path: github_app_webhook_secret
+              {{- end }}
+              {{- end }}
 ---
 # Stable ClusterIP for the API. The Ingress + the FE SSR + the role terminal's
 # in-cluster `gt mcp` proxy (GT_SELF_URL) all dial this.

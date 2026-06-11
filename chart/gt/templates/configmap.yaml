@@ -15,7 +15,12 @@ data:
   # --- Stores (in-cluster service DNS; <fullname>-<svc>) ---
   # Dolt is passwordless on the internal network (compose parity).
   GT_DOLT_URL: "mysql://{{ .Values.dolt.user }}@{{ $fullname }}-dolt:{{ .Values.dolt.port }}/hq"
+  # Multi-tenant routing. The binary PARSES this whenever the var exists — a
+  # set-but-empty value is a boot error ("relative URL without a base"), so the
+  # key is rendered only when configured. Unset ⇒ single-tenant (compose parity).
+  {{- if .Values.mcpServer.doltBaseUrl }}
   GT_DOLT_BASE_URL: {{ .Values.mcpServer.doltBaseUrl | quote }}
+  {{- end }}
   # Postgres URL is assembled in each pod from the secret password (see env);
   # here we publish the non-secret host/user/db parts.
   GT_PG_HOST: "{{ $fullname }}-postgres"

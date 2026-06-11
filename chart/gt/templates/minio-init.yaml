@@ -31,14 +31,22 @@ spec:
         - name: mc
           image: "{{ .Values.minio.initImage.repository }}:{{ .Values.minio.initImage.tag }}"
           command: ["sh", "-c"]
+          # stderr stays on the pod log: the pod runs non-root (gt.podSecurityContext),
+          # so a non-writable mc config dir is a hard error ("mkdir /.mc: permission
+          # denied") that a 2>&1 silence turns into an infinite "waiting for minio..."
+          # loop. MC_CONFIG_DIR/HOME point mc at the writable /tmp.
           args:
             - |
-              until mc alias set local http://{{ $fullname }}-minio:{{ .Values.minio.apiPort }} "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+              until mc alias set local http://{{ $fullname }}-minio:{{ .Values.minio.apiPort }} "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null; do
                 echo "waiting for minio..."; sleep 2;
               done
               mc mb --ignore-existing "local/{{ .Values.minio.bucket }}"
               echo "bucket ready: {{ .Values.minio.bucket }}"
           env:
+            - name: MC_CONFIG_DIR
+              value: /tmp/.mc
+            - name: HOME
+              value: /tmp
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:

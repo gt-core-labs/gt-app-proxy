@@ -66,6 +66,9 @@ mcpServer:
   jwtSigningKid: gt-main      # GT_JWT_RS256_SIGNING_KID
   # Multi-tenant routing: set to a base Dolt URL (no db segment) to turn on
   # per-tenant hq_<ws> routing; empty ⇒ single-tenant (compose default).
+  # Multi-tenant Dolt routing (hq-mt-routing.5): server/creds minus the /hq db,
+  # e.g. "mysql://gtapp@gt-dolt:3307/". Empty ⇒ key OMITTED from the ConfigMap
+  # (single-tenant); the binary rejects a set-but-empty value at boot.
   doltBaseUrl: ""
 
 # Daemon / API split (bead .4). The gt-mcp-server binary HAS a single
@@ -254,10 +257,13 @@ secrets:
   adminEmail: ""              # GT_ADMIN_EMAIL
   adminPassword: ""           # GT_ADMIN_PASSWORD
   # GitHub App (push webhook + JIT installation tokens for private rigs). Empty
-  # ⇒ the webhook + private-rig drift reconcile are off.
+  # githubAppId ⇒ the whole block is omitted from the pod env (the binary
+  # PANICS on a set-but-empty GT_GITHUB_APP_ID). When set, slug + private key
+  # are required by GithubAppConfig::from_env.
   githubAppId: ""             # GT_GITHUB_APP_ID
+  githubAppSlug: ""           # GT_GITHUB_APP_SLUG (github.com/apps/<slug>)
   githubAppPrivateKey: ""     # GT_GITHUB_APP_PRIVATE_KEY contents
-  githubAppWebhookSecret: ""  # GT_GITHUB_APP_WEBHOOK_SECRET
+  githubAppWebhookSecret: ""  # GT_GITHUB_APP_WEBHOOK_SECRET_FILE contents
   # Rig clone token for the orchd singleton (private repo). Empty ⇒ orchd boot
   # clone fails (matches compose: set before bringing orchd up).
   rigGitToken: ""             # GT_RIG_GIT_TOKEN
