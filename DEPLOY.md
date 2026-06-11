@@ -66,10 +66,16 @@ Talos cluster (`talosctl cluster create`) to iterate before touching real nodes.
 
 ## Step 1 — Provision the Talos cluster
 
-> **[PENDING] hq-talos-migration.1** — this flow is authored from the standard
-> Talos bare-metal/Nocloud procedure but has **not yet been validated on the real
-> target hardware**. Treat the disk device, network, and CSI choices below as
-> placeholders to confirm against the actual nodes before a production run.
+> **Bare metal:** the hardware-specific walkthrough (image selection, install
+> disk, network patches, storage provisioner, day-2 upgrades, pitfalls) lives in
+> [`docs/INSTALL-metal-amd64.md`](docs/INSTALL-metal-amd64.md). The flow below
+> is the condensed generic form.
+>
+> **Status (hq-talos-migration.1, closed):** chart + boot seeds + probes were
+> validated end-to-end on a local Talos cluster (smoke §6 7/7). The **real
+> hardware** pass (installer, disks, CSI, network) remains pending — treat the
+> disk device, network, and CSI choices below as placeholders to confirm
+> against the actual nodes before a production run.
 
 Talos boots from its ISO/PXE image into maintenance mode; you then push a
 machine config to it over its API. There is no OS to log into.
