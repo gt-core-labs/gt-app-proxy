@@ -5,3 +5,4 @@ values-secret.yaml
 values-secret.*.yaml
 chart/**/charts/
 chart/**/*.tgz
+values-secret-prod.yaml
