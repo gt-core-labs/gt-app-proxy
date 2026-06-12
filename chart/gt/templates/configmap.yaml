@@ -53,6 +53,16 @@ data:
   # In-cluster loopback for the role terminal's `gt mcp` proxy (compose GT_SELF_URL).
   GT_SELF_URL: "http://{{ $fullname }}-mcp-server:8765"
 
+  {{- if .Values.email.enabled }}
+  # --- Real email (epic hq-9c199d). Non-secret half; GT_SMTP_PASS +
+  #     GT_INBOUND_WEBHOOK_SECRET ride the Secret (see deployment env). ---
+  GT_EMAIL_TRANSPORT: "smtp"
+  GT_SMTP_URL: {{ .Values.email.smtpUrl | quote }}
+  GT_SMTP_USER: {{ .Values.email.smtpUser | quote }}
+  GT_SMTP_FROM: {{ .Values.email.from | quote }}
+  GT_INBOUND_MAIL_DIR: {{ .Values.email.inboundDir | quote }}
+  {{- end }}
+
   {{- if .Values.mcpServer.embeddings }}
   GT_EMBEDDINGS: "1"
   {{- end }}

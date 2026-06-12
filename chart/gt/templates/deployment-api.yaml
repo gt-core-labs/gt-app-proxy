@@ -116,6 +116,15 @@ spec:
             # tier because boot seeds are NOT daemons (not gated by GT_RUN_DAEMONS).
             - name: GT_OAUTH_SEED_SECRET_GOOGLE
               valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_OAUTH_SEED_SECRET_GOOGLE } }
+            {{- if .Values.email.enabled }}
+            # Email secrets (epic hq-9c199d): SMTP password (provider API key)
+            # for the outbox drain + the inbound-webhook shared secret. The
+            # non-secret half (transport/url/from/dir) comes from the ConfigMap.
+            - name: GT_SMTP_PASS
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_SMTP_PASS } }
+            - name: GT_INBOUND_WEBHOOK_SECRET
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_INBOUND_WEBHOOK_SECRET } }
+            {{- end }}
             # Claude accounts root — same path the singleton uses so a dir written
             # by the onboarding REST surface here is read by the rotation daemon.
             - name: GT_CLAUDE_ACCOUNTS_ROOT
@@ -161,6 +170,14 @@ spec:
             - name: secrets
               mountPath: /run/secrets
               readOnly: true
+            {{- if .Values.email.enabled }}
+            # Inbound-mail handoff: the webhook handler writes, the mailbox
+            # daemon in this same pod polls (consume-by-rename). Per-pod
+            # emptyDir is correct — whichever replica receives the POST also
+            # consumes it.
+            - name: mail-inbox
+              mountPath: {{ .Values.email.inboundDir }}
+            {{- end }}
       volumes:
         - name: eventlog
           persistentVolumeClaim:
@@ -168,6 +185,10 @@ spec:
         - name: graph
           persistentVolumeClaim:
             claimName: {{ $fullname }}-graph
+        {{- if .Values.email.enabled }}
+        - name: mail-inbox
+          emptyDir: {}
+        {{- end }}
         - name: secrets
           secret:
             secretName: {{ include "gt.secretName" . }}

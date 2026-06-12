@@ -221,6 +221,25 @@ seed:
   enabled: true
 
 # ---------------------------------------------------------------------------
+# Real email send/receive (epic hq-9c199d; provider: Resend). When enabled the
+# API pods get GT_EMAIL_TRANSPORT=smtp (outbox drain delivers via lettre) and
+# GT_INBOUND_MAIL_DIR (mounts an emptyDir; the inbound webhook at
+# /api/v1/email/inbound writes into it, the command-mailbox daemon in the SAME
+# pod polls it). Credentials live under .secrets (smtpPass,
+# inboundWebhookSecret).
+# ---------------------------------------------------------------------------
+email:
+  enabled: false
+  # smtps:// = implicit TLS (465); smtp:// = STARTTLS (587). GT_SMTP_URL.
+  smtpUrl: "smtps://smtp.resend.com:465"
+  # Resend uses the literal user `resend`; the password is the API key. GT_SMTP_USER.
+  smtpUser: "resend"
+  # From: address — domain must be verified at the provider. GT_SMTP_FROM.
+  from: ""
+  # Where the inbound webhook writes and the mailbox daemon polls. GT_INBOUND_MAIL_DIR.
+  inboundDir: /var/lib/gt-mail-inbox
+
+# ---------------------------------------------------------------------------
 # Secrets (bead .5). NEVER commit real values — supply via values-secret.yaml or
 # --set. Empty values render an empty Secret key; the chart documents which are
 # required for which feature (oauth, github app, admin seed).
@@ -267,3 +286,9 @@ secrets:
   # Rig clone token for the orchd singleton (private repo). Empty ⇒ orchd boot
   # clone fails (matches compose: set before bringing orchd up).
   rigGitToken: ""             # GT_RIG_GIT_TOKEN
+  # Email (only read when email.enabled). smtpPass = the provider API key
+  # (Resend: SMTP password IS the API key). inboundWebhookSecret authenticates
+  # POST /api/v1/email/inbound (header x-gt-inbound-secret or ?secret=) —
+  # generate URL-safe (alnum), e.g. `openssl rand -hex 32`.
+  smtpPass: ""                # GT_SMTP_PASS
+  inboundWebhookSecret: ""    # GT_INBOUND_WEBHOOK_SECRET
