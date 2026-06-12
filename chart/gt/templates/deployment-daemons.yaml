@@ -52,6 +52,10 @@ spec:
                 echo "[orchd] cloning rig into /rig from $GT_RIG_GIT_URL"
                 git clone "https://x-access-token:$GT_RIG_GIT_TOKEN@github.com/gt-core-labs/gt-core.git" /rig
               fi
+              # Always refresh the push URL so a token rotation or a first-boot
+              # with an empty token doesn't leave origin without write credentials.
+              git config --global --add safe.directory /rig
+              git -C /rig remote set-url origin "https://x-access-token:$GT_RIG_GIT_TOKEN@github.com/gt-core-labs/gt-core.git"
               git config --global user.email "polecat@gt.codecsrayo.com"
               git config --global user.name "gt-polecat"
               exec gt-orch-server
