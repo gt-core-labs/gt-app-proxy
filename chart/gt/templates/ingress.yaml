@@ -31,7 +31,7 @@ spec:
       http:
         paths:
           # --- API surfaces → mcp-server:8765 (compose priority 100) ---
-          {{- range $p := list "/auth" "/api" "/mcp" "/stream" "/openapi.json" "/health" "/.well-known" }}
+          {{- range $p := list "/auth" "/api" "/mcp" "/stream" "/openapi.json" "/health" "/.well-known" "/a2a" }}
           - path: {{ $p }}
             pathType: Prefix
             backend:

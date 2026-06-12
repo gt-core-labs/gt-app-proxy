@@ -70,6 +70,15 @@ data:
   GT_TERMINAL_ENABLE: "1"
   {{- end }}
 
+  {{- if .Values.a2a.enabled }}
+  # --- A2A ingress (gtcore-9039b5): all-or-nothing — the binary mounts POST /a2a
+  #     + the public agent card only when every required env resolves. ---
+  GT_A2A_DEFAULT_RIG: {{ .Values.a2a.defaultRig | quote }}
+  GT_A2A_INTAKE_EPIC: {{ required "a2a.intakeEpic is required when a2a.enabled" .Values.a2a.intakeEpic | quote }}
+  GT_A2A_ORCHD_URL: {{ .Values.a2a.orchdUrl | default (printf "http://%s-mcp-server:8765" (include "gt.fullname" .)) | quote }}
+  GT_PUBLIC_URL: {{ printf "https://%s" .Values.domain | quote }}
+  {{- end }}
+
   # --- Daemon cadence (shared default; the API Deployment OVERRIDES these to the
   #     OFF value so only the singleton ticks — see deployment-api.yaml). ---
   GT_CHANNEL_ROOT: {{ .Values.daemons.channelRoot | quote }}
