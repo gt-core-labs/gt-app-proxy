@@ -79,6 +79,14 @@ data:
   GT_PUBLIC_URL: {{ printf "https://%s" .Values.domain | quote }}
   {{- end }}
 
+  {{- if .Values.autoDispatch.enabled }}
+  # --- Autonomous dispatch (Fase 2 — A1): orchd polls the ready_for_auto
+  #     frontier and feeds eligible beads to the scheduler. ---
+  GT_AUTO_DISPATCH: "1"
+  GT_AUTO_DISPATCH_MAX: {{ .Values.autoDispatch.maxInFlight | quote }}
+  GT_AUTO_DISPATCH_TICK_SECS: {{ .Values.autoDispatch.tickSecs | quote }}
+  {{- end }}
+
   # --- Daemon cadence (shared default; the API Deployment OVERRIDES these to the
   #     OFF value so only the singleton ticks — see deployment-api.yaml). ---
   GT_CHANNEL_ROOT: {{ .Values.daemons.channelRoot | quote }}

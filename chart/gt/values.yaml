@@ -75,6 +75,16 @@ mcpServer:
 # JSON-RPC) + the public GET /.well-known/agent.json discovery card. The binary
 # mounts the surface ONLY when every GT_A2A_* env is present (all-or-nothing),
 # so `enabled: false` simply omits them and a default deploy serves no A2A.
+autoDispatch:
+  # Enable the autonomous dispatch loop in orchd (Fase 2 — A1).
+  # When on, the orchd polls the ready_for_auto frontier every tickSecs and
+  # feeds eligible beads to the scheduler → polecat sling.
+  enabled: false
+  # Max concurrent auto-dispatched beads (in-flight bound).
+  maxInFlight: 4
+  # Frontier poll interval (seconds).
+  tickSecs: 30
+
 a2a:
   enabled: false
   # Default rig minted beads route to (`metadata.rig` on tasks/send overrides).
