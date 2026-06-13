@@ -1,0 +1,203 @@
+{{/*
+Autonomous-agent Deployments (Fase 2 — A1, gtcore-2a97de).
+
+One Deployment + two PVCs per rig where `.Values.agents.<rig>.autonomous`
+is true. Each pod runs gt-orch-server in rig-isolated mode:
+  - GT_RUN_DAEMONS=0  — singleton loops stay on the orchd Deployment.
+  - GT_RIG set to the rig name — the polecat sling targets this rig only.
+  - Recreate strategy — at most one agent pod per rig at any time.
+  - K8s restartPolicy (Always) replaces gt-polecat::supervisor for these rigs.
+
+Credential note (A2 gap): until gtcore-4023de lands, the pod reads claude
+credentials from the shared gt-secrets Secret (same limitation as the orchd
+singleton). A2 will replace this with a per-agent K8s Secret mounted at
+/run/secrets/claude — no kubectl cp needed after that.
+*/}}
+{{- range $rigName, $agent := .Values.agents }}
+{{- if $agent.autonomous }}
+{{- $root := $ }}
+{{- $fullname := include "gt.fullname" $root }}
+{{- $component := printf "agent-%s" $rigName }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-agent-{{ $rigName }}
+  labels:
+    {{- include "gt.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+  annotations:
+    gt/autonomous-rig: {{ $rigName | quote }}
+    gt/fase: "2-A1"
+spec:
+  replicas: 1
+  # Recreate: the old pod must be gone before the new one starts.
+  # Two concurrent agent pods for the same rig would race on the shared
+  # rig PVC and corrupt in-flight worktrees.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gt.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gt.selectorLabels" (dict "root" $root "component" $component) | nindent 8 }}
+      annotations:
+        gt/autonomous-rig: {{ $rigName | quote }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "gt.podSecurityContext" $root | nindent 8 }}
+      containers:
+        - name: agent
+          image: "{{ $agent.image.repository }}:{{ $agent.image.tag }}"
+          imagePullPolicy: {{ $agent.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              if [ ! -d /rig/.git ]; then
+                echo "[agent-{{ $rigName }}] cloning rig from $GT_RIG_GIT_URL"
+                git clone "https://x-access-token:$GT_RIG_GIT_TOKEN@${GT_RIG_GIT_URL#https://}" /rig
+              fi
+              git config --global --add safe.directory /rig
+              git -C /rig remote set-url origin \
+                "https://x-access-token:$GT_RIG_GIT_TOKEN@${GT_RIG_GIT_URL#https://}"
+              git config --global user.email "agent-{{ $rigName }}@gt.codecsrayo.com"
+              git config --global user.name "gt-agent-{{ $rigName }}"
+              exec gt-orch-server
+          envFrom:
+            - configMapRef:
+                name: {{ include "gt.configName" $root }}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" $root }}
+                  key: POSTGRES_PASSWORD
+            - name: GT_PG_URL
+              value: "postgres://$(GT_PG_USER):$(POSTGRES_PASSWORD)@$(GT_PG_HOST):$(GT_PG_PORT)/$(GT_PG_DB)"
+            - name: GT_PG_AUDIT_URL
+              value: "postgres://$(GT_PG_USER):$(POSTGRES_PASSWORD)@$(GT_PG_HOST):$(GT_PG_PORT)/$(GT_PG_DB)"
+            # Daemon loops stay on the orchd singleton — this pod is rig-only.
+            - name: GT_RUN_DAEMONS
+              value: "0"
+            - name: GT_WORKSPACE
+              value: default
+            - name: GT_POOL_SIZE
+              value: {{ $agent.poolSize | default 1 | quote }}
+            - name: GT_POLECAT_MEM_MB
+              value: {{ $agent.polecatMemMb | default 1024 | quote }}
+            - name: GT_POLECAT_MAX_RESTARTS
+              value: {{ $agent.polecatMaxRestarts | default 3 | quote }}
+            - name: IS_SANDBOX
+              value: "1"
+            # Rig identity — this pod owns exactly one rig.
+            - name: GT_RIG
+              value: {{ $rigName | quote }}
+            - name: GT_POLECAT_PREFIX
+              value: {{ $rigName | quote }}
+            - name: GT_POLECAT_CMD
+              value: claude
+            - name: GT_RIG_PATH
+              value: /rig
+            - name: GT_POLECAT_WORKTREE_ROOT
+              value: /rig-wt
+            - name: GT_MERGE_READY_CHANNEL
+              value: {{ $root.Values.daemons.mergeReadyChannel | quote }}
+            - name: GT_QUOTA_FEED_CHANNEL
+              value: {{ $root.Values.daemons.quotaFeedChannel | quote }}
+            - name: GT_HEARTBEAT_DIR
+              value: /var/lib/gt-core/.heartbeats
+            - name: GT_CLAUDE_ACCOUNTS_ROOT
+              value: {{ $root.Values.daemons.claudeAccountsRoot | quote }}
+            - name: GT_METRICS_BIND
+              value: 0.0.0.0:9099
+            - name: GT_RIG_GIT_URL
+              value: {{ $agent.rigGitUrl | quote }}
+            - name: GT_RIG_GIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gt.secretName" $root }}
+                  key: GT_RIG_GIT_TOKEN
+          ports:
+            - name: metrics
+              containerPort: 9099
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml $agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: eventlog
+              mountPath: /var/lib/gt-core
+            - name: rig
+              mountPath: /rig
+            - name: rig-wt
+              mountPath: /rig-wt
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        # Shared event log — same PVC as orchd and mcp-server; agents read
+        # dispatch events and write session/heartbeat records here.
+        - name: eventlog
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-eventlog
+        # Per-rig PVCs: isolated clone per autonomous agent pod.
+        - name: rig
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-agent-{{ $rigName }}-rig
+        - name: rig-wt
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-agent-{{ $rigName }}-rig-wt
+        # Secrets: jwt_private.pem for token minting. A2 (gtcore-4023de)
+        # will add claude credential items here so kubectl cp is no longer
+        # needed on pod restart.
+        - name: secrets
+          secret:
+            secretName: {{ include "gt.secretName" $root }}
+            items:
+              - key: jwt_private.pem
+                path: jwt_private.pem
+---
+# Per-rig clone volume: isolated so parallel agents never share a working tree.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-agent-{{ $rigName }}-rig
+  labels:
+    {{- include "gt.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "gt.storageClass" $root | nindent 2 }}
+  resources:
+    requests:
+      storage: 5Gi
+---
+# Per-rig worktree volume: one per autonomous agent, mirrors orchd-rig-wt.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-agent-{{ $rigName }}-rig-wt
+  labels:
+    {{- include "gt.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "gt.storageClass" $root | nindent 2 }}
+  resources:
+    requests:
+      storage: 5Gi
+{{- end }}
+{{- end }}

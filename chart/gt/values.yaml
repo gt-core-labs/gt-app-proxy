@@ -98,6 +98,42 @@ a2a:
   # reap is a known gap until orchd serves its own agent REST).
   orchdUrl: ""
 
+# ---------------------------------------------------------------------------
+# Autonomous agents (Fase 2 — A1/A2, gtcore-2a97de/gtcore-4023de).
+#
+# Set agents.<rig>.autonomous: true to promote a rig from the ephemeral
+# polecat model (orchd singleton → tmux → claude) to an always-on K8s
+# Deployment. K8s restartPolicy (Recreate) replaces gt-polecat::supervisor
+# for promoted rigs; the orchd singleton remains as substrate for dispatch,
+# merge serialisation, and non-promoted rigs.
+#
+# OPT-IN by rig — default is empty (no promoted rigs). Measure RAM/CPU idle
+# with `kubectl top pod` before promoting; a gtcore rig at idle is ~300 MB
+# RSS + 0 tokens (wake-on-task via the dispatch channel).
+#
+# A2 (gtcore-4023de) will add per-agent K8s Secrets (mounted, not kubectl
+# cp'd). Until then the pod uses the shared gt-secrets placeholder and
+# manual kubectl cp is still needed on first boot — the same limitation as
+# the orchd singleton today.
+agents: {}
+# Example — uncomment and set autonomous: true to promote:
+# gtcore:
+#   autonomous: false
+#   image:
+#     repository: codecsrayo/gt-core-mcp-server
+#     tag: embeddings
+#     pullPolicy: IfNotPresent
+#   resources:
+#     requests:
+#       cpu: 100m
+#       memory: 512Mi
+#     limits:
+#       memory: 1Gi
+#   rigGitUrl: https://github.com/gt-core-labs/gt-core.git
+#   poolSize: 1
+#   polecatMemMb: 1024
+#   polecatMaxRestarts: 3
+
 # Daemon / API split (bead .4). The gt-mcp-server binary HAS a single
 # GT_RUN_DAEMONS gate (default ON; `=0` disables every singleton daemon loop —
 # reaper, archive, account-GC, drift-reconcile, convoy→scheduler, quota
