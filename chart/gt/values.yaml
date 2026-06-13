@@ -133,6 +133,14 @@ agents: {}
 #   poolSize: 1
 #   polecatMemMb: 1024
 #   polecatMaxRestarts: 3
+#   # A2 (gtcore-4023de): pre-provision claude credentials in a K8s Secret and
+#   # set credentialSecret to its name. The Secret is mounted at /run/secrets/claude
+#   # inside the agent pod; gt-orch-server seeds it via GT_CLAUDE_ACCOUNTS on boot
+#   # (no kubectl cp needed after restart). Create with:
+#   #   kubectl create secret generic gt-agent-gtcore-creds \
+#   #     --from-file=.credentials.json=~/.claude/.credentials.json \
+#   #     --from-file=.claude.json=~/.claude/.claude.json
+#   credentialSecret: ""  # e.g. gt-agent-gtcore-creds
 
 # Daemon / API split (bead .4). The gt-mcp-server binary HAS a single
 # GT_RUN_DAEMONS gate (default ON; `=0` disables every singleton daemon loop —

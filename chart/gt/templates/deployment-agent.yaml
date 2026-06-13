@@ -116,6 +116,12 @@ spec:
               value: /var/lib/gt-core/.heartbeats
             - name: GT_CLAUDE_ACCOUNTS_ROOT
               value: {{ $root.Values.daemons.claudeAccountsRoot | quote }}
+            {{- if $agent.credentialSecret }}
+            # A2 (gtcore-4023de): credential Secret mounted at /run/secrets/claude;
+            # gt-orch-server seeds it via GT_CLAUDE_ACCOUNTS on boot so no kubectl cp needed.
+            - name: GT_CLAUDE_ACCOUNTS
+              value: "{{ $rigName }}=/run/secrets/claude"
+            {{- end }}
             - name: GT_METRICS_BIND
               value: 0.0.0.0:9099
             - name: GT_RIG_GIT_URL
@@ -147,6 +153,14 @@ spec:
             - name: secrets
               mountPath: /run/secrets
               readOnly: true
+            {{- if $agent.credentialSecret }}
+            # A2 (gtcore-4023de): per-agent credential Secret. Mounted read-only;
+            # gt-orch-server picks it up via GT_CLAUDE_ACCOUNTS on boot —
+            # no kubectl cp needed after pod restart.
+            - name: claude-creds
+              mountPath: /run/secrets/claude
+              readOnly: true
+            {{- end }}
       volumes:
         # Shared event log — same PVC as orchd and mcp-server; agents read
         # dispatch events and write session/heartbeat records here.
@@ -160,15 +174,21 @@ spec:
         - name: rig-wt
           persistentVolumeClaim:
             claimName: {{ $fullname }}-agent-{{ $rigName }}-rig-wt
-        # Secrets: jwt_private.pem for token minting. A2 (gtcore-4023de)
-        # will add claude credential items here so kubectl cp is no longer
-        # needed on pod restart.
+        # Secrets: jwt_private.pem for token minting.
         - name: secrets
           secret:
             secretName: {{ include "gt.secretName" $root }}
             items:
               - key: jwt_private.pem
                 path: jwt_private.pem
+        {{- if $agent.credentialSecret }}
+        # A2 (gtcore-4023de): per-agent claude credential Secret.
+        # Create with: kubectl create secret generic <name> --from-file=.credentials.json --from-file=.claude.json
+        - name: claude-creds
+          secret:
+            secretName: {{ $agent.credentialSecret }}
+            defaultMode: 0400
+        {{- end }}
 ---
 # Per-rig clone volume: isolated so parallel agents never share a working tree.
 apiVersion: v1
