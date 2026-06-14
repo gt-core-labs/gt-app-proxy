@@ -114,6 +114,10 @@ spec:
               value: {{ .Values.daemons.rigGitUrl | quote }}
             - name: GT_RIG_GIT_TOKEN
               valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_RIG_GIT_TOKEN } }
+            {{- if .Values.daemons.ciGatedMerge }}
+            - name: GT_CI_GATED_MERGE
+              value: "1"
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 9099

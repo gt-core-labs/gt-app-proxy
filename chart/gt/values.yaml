@@ -167,6 +167,7 @@ daemons:
   poolSize: 1
   polecatMemMb: 1024
   polecatMaxRestarts: 3
+  ciGatedMerge: false
   rig: hq
   polecatPrefix: gt
   rigGitUrl: https://github.com/gt-core-labs/gt-core.git
