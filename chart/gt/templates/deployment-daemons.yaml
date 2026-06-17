@@ -10,7 +10,9 @@
 # Mirrors compose `gt-orch-server`: clone the rig into its PVC on first boot,
 # set the commit identity, exec the daemon. fsGroup makes /rig writable by uid
 # 1000 WITHOUT the safe.directory hack (.10/.11 obsolete). Idle until a bead is
-# dropped on the dispatch channel (cost gate: GT_POOL_SIZE=1).
+# dropped on the dispatch channel. GT_POOL_SIZE (daemons.poolSize) bounds the
+# in-pod polecat fan-out; it MUST stay within daemons.resources.limits.memory
+# (incidente 2026-06-15 OOM: pool × polecatMemMb must fit the limit).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

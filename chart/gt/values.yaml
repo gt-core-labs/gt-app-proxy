@@ -157,14 +157,21 @@ daemons:
     repository: codecsrayo/gt-core-mcp-server
     tag: embeddings
     pullPolicy: IfNotPresent
+  # Memory sizing (incidente 2026-06-15, OOM crash-loop / exit 137): the orchd
+  # singleton forks up to GT_POOL_SIZE polecats in-pod, each ~polecatMemMb. With
+  # the old 2Gi limit + an unbounded pool the pod OOMKilled. Cap the pool and
+  # raise the limit so peak pool RAM fits: poolSize × polecatMemMb must stay
+  # under limits.memory (4 × 1024Mi ≈ 4Gi < 8Gi). At 8Gi the safe ceiling is
+  # ≈ 12 polecats; do not raise poolSize past that without also raising the limit.
   resources:
     requests:
       cpu: 250m
-      memory: 1Gi
-    limits:
       memory: 2Gi
-  # orchd cost gate (compose: profile orchd, idle until a bead lands).
-  poolSize: 1
+    limits:
+      memory: 8Gi
+  # orchd pool size (concurrent in-pod polecats). Bounded to fit the 8Gi limit
+  # above — see the memory sizing note (incidente 2026-06-15).
+  poolSize: 4
   polecatMemMb: 1024
   polecatMaxRestarts: 3
   ciGatedMerge: false
