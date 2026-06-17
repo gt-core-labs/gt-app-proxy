@@ -160,6 +160,9 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
             failureThreshold: 3
+          # Memory: limits 4Gi / requests 1Gi (mcpServer.api.resources). The
+          # :embeddings image OOMs at 2Gi — see values.yaml + DEPLOY.md (incidente
+          # 2026-06-17). Pinned so a helm upgrade never reverts the cap to 2Gi.
           resources:
             {{- toYaml .Values.mcpServer.api.resources | nindent 12 }}
           volumeMounts:
