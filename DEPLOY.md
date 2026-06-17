@@ -433,3 +433,22 @@ after the cluster has been the source of truth long enough to trust.
 - `migrate/migrate-*.sh` + `migrate/lib/common.sh` +
   `migrate/manifests/eventlog-migrate-pod.yaml` — the operator data-migration
   scripts (DRY_RUN-default, fail-closed verification, old volumes preserved).
+
+---
+
+## Appendix — memory sizing (why mcp-server gets 4Gi)
+
+`gt-mcp-server` runs the **`:embeddings`** image (`codecsrayo/gt-core-mcp-server:embeddings`),
+which loads embedding models into memory at boot — substantially heavier than the
+plain server. With a `limits.memory=2Gi` cap it OOMKills (exitCode 137) in a
+crash-loop, leaving the MCP intermittently unservable (`no available server`) and
+stalling every polecat that depends on it.
+
+- **Incidente 2026-06-17:** 3 OOM restarts observed; live-patched with
+  `kubectl set resources deploy/gt-mcp-server -n gt --limits=memory=4Gi --requests=memory=1Gi`.
+- **Persisted in the chart** via `mcpServer.api.resources` (defaults
+  `requests.memory=1Gi`, `limits.memory=4Gi`) so a `helm upgrade` no longer
+  reverts the cap to 2Gi. Override in `values.yaml` if the embeddings model set grows.
+- The worker node has 32Gi (~15% used) and `orchd` already caps at 8Gi, so there
+  is ample headroom. Same persistence pattern as the orchd OOM fix (bead
+  `gtproxy-b5c538`).
