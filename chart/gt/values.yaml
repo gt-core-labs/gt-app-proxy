@@ -181,6 +181,23 @@ daemons:
   polecatMemMb: 1024
   polecatMaxRestarts: 3
   ciGatedMerge: false
+  # Operator notification address for merge-failure emails (GT_NOTIFY_EMAIL).
+  # The merge daemon runs on THIS singleton; when a merge.failed event needs the
+  # operator (e.g. gh auth wiped by a redeploy — gtcore-4c9c85, or quota fully
+  # exhausted) the handler enqueues an email into email_outbox and the outbox
+  # drain (also a singleton daemon, GT_RUN_DAEMONS=1) delivers it via SMTP.
+  # UNSET this env and the orchd logs "merge-failure emails off — GT_NOTIFY_EMAIL
+  # unset (bell only)": the failure only rings the gt-web bell, invisible if the
+  # operator isn't watching (gtproxy-85bdea).
+  #
+  # Set here (not via a live `kubectl set env`) so a helm upgrade never reverts
+  # it. Default = the prod operator. Set to "" to opt OUT (bell-only) on mail-less
+  # environments — orchd still boots fine, the path is optional.
+  #
+  # NOTE: delivery ALSO requires email.enabled (SMTP transport + GT_SMTP_PASS).
+  # With notifyEmail set but email.enabled=false the event is enqueued but the
+  # outbox drain has no transport — set both for end-to-end delivery.
+  notifyEmail: brayanrayo@bi-quare.com
   rig: hq
   polecatPrefix: gt
   rigGitUrl: https://github.com/gt-core-labs/gt-core.git

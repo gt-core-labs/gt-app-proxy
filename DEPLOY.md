@@ -224,6 +224,44 @@ kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/
 # ...kubeseal the keys from values-secret.yaml.example into gt-gt-secrets...
 ```
 
+### Email — outbound delivery + operator notifications
+
+Two distinct things share the SMTP transport. Keep them straight when deciding
+what to enable:
+
+| What | Trigger | Env that turns it on | Where it runs |
+| --- | --- | --- | --- |
+| **Real email transport** | enables SMTP send/receive at all | `email.enabled=true` → `GT_EMAIL_TRANSPORT=smtp` + `GT_SMTP_URL/USER/FROM` (ConfigMap) + `GT_SMTP_PASS` (Secret) | API pods (outbox drain + inbound webhook) **and** orchd singleton (outbox drain) |
+| **Merge-failure operator email** | a `merge.failed` event that needs the operator (e.g. `gh` auth wiped by a redeploy — gtcore-4c9c85; quota fully exhausted) | `daemons.notifyEmail` → `GT_NOTIFY_EMAIL` on orchd (default `brayanrayo@bi-quare.com`) | orchd singleton (the merge daemon enqueues into `email_outbox`; the outbox drain delivers) |
+| **Escalation email** | an agent raises an escalation needing a human | the escalation surface (already wired) — sends its own email independently of `GT_NOTIFY_EMAIL` | API/daemon |
+
+Notes:
+
+- **Merge-failure email is the path this section exists for (gtproxy-85bdea).**
+  Without `GT_NOTIFY_EMAIL` the orchd boots logging
+  `merge-failure emails off — GT_NOTIFY_EMAIL unset (bell only)`: a failed merge
+  then only rings the gt-web bell, which is invisible if nobody is watching. The
+  chart now sets `GT_NOTIFY_EMAIL` from `daemons.notifyEmail` (default the prod
+  operator) so a `helm upgrade` never reverts it — unlike a live
+  `kubectl set env`, which the next sync wipes.
+- **`notifyEmail` and `email.enabled` are independent toggles, but delivery needs
+  both.** `notifyEmail` set + `email.enabled=false` ⇒ the failure is *enqueued*
+  into `email_outbox` but the drain has no SMTP transport, so nothing is sent.
+  For end-to-end delivery set **both**. The orchd now also mounts `GT_SMTP_PASS`
+  when `email.enabled` so the drain on the singleton has credentials (previously
+  only the API pods did).
+- **Opt out** on mail-less environments with `--set daemons.notifyEmail=""`. The
+  orchd boots fine (bell-only) — the path is optional and the empty value omits
+  the env entirely.
+- **Verify** after enabling: orchd boot log no longer contains
+  `merge-failure emails off`; force a `merge.failed` (or wait for a real one) and
+  confirm a row lands in `email_outbox` and is drained:
+
+  ```sh
+  kubectl -n gt logs deploy/gt-gt-orchd | grep -i "merge-failure emails"   # expect NO match
+  kubectl -n gt logs deploy/gt-gt-orchd | grep -iE "email_outbox|notify"   # enqueue + drain
+  ```
+
 ---
 
 ## Step 4 — Stateful services + verify PVCs
