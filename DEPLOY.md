@@ -295,6 +295,13 @@ safely** — none of them tick a singleton loop, and the boot seeds (not daemons
 are idempotent so racing replicas don't double-seed. Detail in
 [`chart/gt/README.md`](chart/gt/README.md) §"API vs daemon split".
 
+**Graceful redeploy drain (orchd).** Because the orchd is `strategy: Recreate`,
+every merge-triggered redeploy kills the singleton — and with it every in-pod
+polecat mid-task. A **preStop checkpoint-push** WIP-commits + pushes each
+`/rig-wt/*` worktree before the daemon is signalled, so in-flight (uncommitted)
+work is never lost across a redeploy. See
+[Appendix — graceful redeploy drain](#appendix--graceful-redeploy-drain-orchd).
+
 ---
 
 ## Step 5 — Data migration (prod → cluster)  *(migration path only)*
@@ -490,3 +497,61 @@ stalling every polecat that depends on it.
 - The worker node has 32Gi (~15% used) and `orchd` already caps at 8Gi, so there
   is ample headroom. Same persistence pattern as the orchd OOM fix (bead
   `gtproxy-b5c538`).
+
+---
+
+## Appendix — graceful redeploy drain (orchd)
+
+**Why (gtproxy-3c561c).** The orchd is a `replicas: 1`, `strategy: Recreate`
+singleton (`chart/gt/templates/deployment-daemons.yaml`). Every merge triggers a
+deploy → redeploy of this Deployment, and *Recreate* means the old pod must be
+**fully gone** before the new one starts. So each redeploy SIGTERMs the orchd and
+every polecat it has forked in-pod, mid-task. The early checkpoint-push
+(`gtcore-4cea57`) only rescues work a polecat had **already committed**;
+**uncommitted** edits in its `/rig-wt/<session>` worktree were lost and the bead
+was stranded `working` with no progress on the branch.
+
+**What the chart does now.** A `preStop` lifecycle hook on the orchd container
+runs a **final checkpoint-push** before the daemon is signalled:
+
+1. For each `/rig-wt/*/` worktree, resolve its checked-out branch.
+2. If the tree is dirty → `git add -A` + `git commit -m "wip: preStop checkpoint
+   (orchd redeploy)"`.
+3. `git push origin HEAD:<branch>` — unconditionally, so a commit that hadn't
+   been pushed yet when the redeploy hit also lands.
+
+It runs as the daemon (root), which owns the git identity and the authenticated
+`origin` on the shared `.git`, so the per-worktree push carries write
+credentials. When the redeploy ships, every branch reflects its last in-flight
+state and the polecat (or the refinery) can resume from the pushed tip.
+
+**Bounded — it cannot hang shutdown.** The whole hook is wrapped in
+`timeout {{ daemons.drainTimeoutSecs }}` (default **90s**), and the pod's
+`terminationGracePeriodSeconds` (default **120s**) is set **above** it so the
+kubelet never SIGKILLs mid-push. A wedged push is abandoned at the timeout, not
+left to block forever. Two knobs in `chart/gt/values.yaml` under `daemons:`:
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `daemons.drainTimeoutSecs` | `90` | hard ceiling the preStop `timeout` enforces |
+| `daemons.terminationGracePeriodSeconds` | `120` | kubelet SIGTERM→SIGKILL window; **must exceed** `drainTimeoutSecs` |
+
+> **Invariant:** keep `terminationGracePeriodSeconds > drainTimeoutSecs` (push +
+> commit time + slack for the daemon's own SIGTERM handling). If you raise the
+> drain ceiling, raise the grace period too.
+
+**No-op when idle.** With no `/rig-wt/*` worktrees (no polecats in-flight) the
+loop body never executes and shutdown returns immediately — the grace period is
+only a ceiling, not a forced wait.
+
+**Verify.**
+
+```sh
+# preStop + grace period rendered on the orchd:
+helm template gt chart/gt --show-only templates/deployment-daemons.yaml \
+  | grep -E "terminationGracePeriodSeconds|preStop|checkpoint-push"
+
+# On a real redeploy with a polecat working, the orchd logs the pushes:
+kubectl -n gt logs deploy/gt-gt-orchd -c orchd --previous | grep "\[preStop\]"
+# then confirm the in-flight branch advanced on origin (last WIP commit present).
+```
