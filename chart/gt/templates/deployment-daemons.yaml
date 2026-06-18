@@ -120,6 +120,23 @@ spec:
             - name: GT_CI_GATED_MERGE
               value: "1"
             {{- end }}
+            {{- if .Values.daemons.notifyEmail }}
+            # Merge-failure operator email (gtproxy-85bdea). The merge daemon +
+            # the outbox drain BOTH run on this singleton; with this set the boot
+            # no longer logs "merge-failure emails off" and a merge.failed that
+            # needs the operator enqueues into email_outbox. Persisted in values so
+            # a helm upgrade never reverts it (unlike a live `kubectl set env`).
+            - name: GT_NOTIFY_EMAIL
+              value: {{ .Values.daemons.notifyEmail | quote }}
+            {{- end }}
+            {{- if .Values.email.enabled }}
+            # SMTP transport for the outbox drain. The non-secret half (transport/
+            # url/user/from) rides the shared ConfigMap (envFrom); the API key is a
+            # Secret. Without it the merge-failure email is ENQUEUED but never sent
+            # — the drain has no credentials. (Inbound webhook secret is API-only.)
+            - name: GT_SMTP_PASS
+              valueFrom: { secretKeyRef: { name: {{ include "gt.secretName" . }}, key: GT_SMTP_PASS } }
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 9099
