@@ -36,6 +36,16 @@ spec:
       # k8s SA-token automount at /var/run/secrets/kubernetes.io collides with
       # that read-only mount and runc fails. The app doesn't call the k8s API.
       automountServiceAccountToken: false
+      # Graceful drain on redeploy (gtproxy-3c561c). Every merge triggers a
+      # Recreate of this singleton; the new pod can't start until the old one is
+      # GONE, which SIGTERMs every in-pod polecat mid-task. The early
+      # checkpoint-push (gtcore-4cea57) only saves what a polecat already
+      # committed — uncommitted worktree edits are lost and the bead is stranded
+      # `working`. The preStop hook below WIP-commits + pushes every /rig-wt/*
+      # worktree before the daemon is signalled, so a redeploy never drops
+      # in-flight work. The grace period must comfortably exceed the worst-case
+      # push time (drainTimeoutSecs + slack) or the kubelet SIGKILLs mid-push.
+      terminationGracePeriodSeconds: {{ .Values.daemons.terminationGracePeriodSeconds }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -140,6 +150,39 @@ spec:
           ports:
             - name: metrics
               containerPort: 9099
+          # preStop checkpoint-push (gtproxy-3c561c): final WIP-commit + push of
+          # every in-flight worktree before the orchd is signalled on a redeploy,
+          # so no uncommitted in-flight work is lost. Best-effort and BOUNDED:
+          # the whole hook is wrapped in `timeout` so it can never hang shutdown
+          # past the grace period; with no /rig-wt/* worktrees (no polecats
+          # in-flight) it is a fast no-op. Runs as the daemon (root) which owns
+          # the git identity + the authenticated `origin` on the shared .git, so
+          # `git push origin HEAD` from each linked worktree carries write creds.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    timeout {{ .Values.daemons.drainTimeoutSecs }} sh -c '
+                      set +e
+                      git config --global --add safe.directory "*" 2>/dev/null
+                      for wt in /rig-wt/*/; do
+                        [ -d "$wt/.git" ] || [ -f "$wt/.git" ] || continue
+                        br=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null) || continue
+                        [ -n "$br" ] || continue
+                        # Nothing to do if the tree is clean (already committed/pushed).
+                        if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+                          git -C "$wt" add -A 2>/dev/null
+                          git -C "$wt" commit -q -m "wip: preStop checkpoint (orchd redeploy)" 2>/dev/null
+                        fi
+                        # Push the branch tip regardless: a prior commit may not
+                        # have been pushed yet when the redeploy hit.
+                        echo "[preStop] checkpoint-push $br ($wt)"
+                        git -C "$wt" push origin "HEAD:$br" 2>&1 || echo "[preStop] push failed for $br (best-effort)"
+                      done
+                    ' || true
           resources:
             {{- toYaml .Values.daemons.resources | nindent 12 }}
           volumeMounts:

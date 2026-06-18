@@ -180,6 +180,19 @@ daemons:
   poolSize: 4
   polecatMemMb: 1024
   polecatMaxRestarts: 3
+  # Graceful redeploy drain (gtproxy-3c561c). On every merge this singleton is
+  # Recreate-d; the preStop hook (deployment-daemons.yaml) WIP-commits + pushes
+  # every /rig-wt/* worktree before the daemon is SIGTERMed so no in-flight,
+  # uncommitted polecat work is lost. Two knobs, kept in sync by construction:
+  #   - drainTimeoutSecs: hard ceiling the preStop `timeout` enforces, so the
+  #     hook can NEVER hang shutdown indefinitely (a wedged push is abandoned).
+  #   - terminationGracePeriodSeconds: the kubelet's SIGTERM→SIGKILL window; it
+  #     MUST exceed drainTimeoutSecs (push time + commit + slack) or the pod is
+  #     killed mid-push. Default 120 = 90s drain + 30s slack for the daemon's own
+  #     SIGTERM handling. With no worktrees in-flight the hook is a fast no-op and
+  #     shutdown returns immediately (the grace period is only a ceiling).
+  drainTimeoutSecs: 90
+  terminationGracePeriodSeconds: 120
   ciGatedMerge: false
   # Operator notification address for merge-failure emails (GT_NOTIFY_EMAIL).
   # The merge daemon runs on THIS singleton; when a merge.failed event needs the
