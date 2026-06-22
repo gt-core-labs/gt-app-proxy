@@ -50,16 +50,16 @@ mcpServer:
     # left the MCP intermittently unservable ('no available server'). First raised
     # to 4Gi; embeddings kept OOMing at 4Gi too (exit137 persist), so the live fix
     # was bumped again: `kubectl set resources --limits=memory=6Gi --requests=
-    # memory=1Gi`. Pinned at 6Gi here so a helm upgrade never reverts it. Node has
+    # memory=1Gi`. Pinned at 8Gi here (operator: extra headroom for embeddings) so a helm upgrade never reverts it. Node has
     # 32Gi (~15% used), plenty of headroom (orchd already caps at 8Gi). The
     # deploy-reconciler (gtproxy-50c890) only `kubectl set image`s, so it never
     # touches this limit. See DEPLOY.md.
     resources:
       requests:
         cpu: 250m
-        memory: 1Gi
+        memory: 2Gi
       limits:
-        memory: 6Gi
+        memory: 8Gi
     # maxUnavailable 0 → never drop below desired during a rollout.
     rollingUpdate:
       maxUnavailable: 0
