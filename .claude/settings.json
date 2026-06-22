@@ -1,0 +1,100 @@
+{
+  "_gt_managed": "polecat-hooks",
+  "dangerouslySkipPermissions": true,
+  "enabledMcpjsonServers": [
+    "gt"
+  ],
+  "hasCompletedOnboarding": true,
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "[ -n \"$GT_HEARTBEAT_FILE\" ] && { mkdir -p \"$(dirname \"$GT_HEARTBEAT_FILE\")\" 2>/dev/null; touch \"$GT_HEARTBEAT_FILE\" 2>/dev/null; } || true",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "ev=$(cat); if command -v jq >/dev/null 2>&1; then p=$(printf '%s' \"$ev\" | jq -r '.tool_input.file_path // .tool_input.filePath // empty' 2>/dev/null); else p=$(printf '%s' \"$ev\" | grep -oE '\"file_?[Pp]ath\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' | head -n1 | sed -E 's/.*:[[:space:]]*\"([^\"]*)\"/\\1/'); fi; case \"$p\" in */memory/*.md) echo \"❌ BLOCKED: local memory files are read-only — write memories via the gt MCP tool mcp__gt__memory_save (memory.save), not by editing $p\" >&2; exit 2 ;; esac; exit 0",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "[ -n \"$GT_HEARTBEAT_FILE\" ] && { mkdir -p \"$(dirname \"$GT_HEARTBEAT_FILE\")\" 2>/dev/null; touch \"$GT_HEARTBEAT_FILE\" 2>/dev/null; } || true",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "case \"${GT_MEMORY_AUTORECALL:-on}\" in 0|false|FALSE|off|OFF|no|NO) exit 0 ;; esac; q=\"${GT_HOOK_BEAD:-}\"; [ -n \"$q\" ] || exit 0; command -v gtmcp >/dev/null 2>&1 || exit 0; command -v jq >/dev/null 2>&1 || exit 0; lim=\"${GT_MEMORY_AUTORECALL_LIMIT:-8}\"; case \"$lim\" in ''|*[!0-9]*) lim=8 ;; esac; req=$(jq -nc --arg q \"$q\" --argjson l \"$lim\" '{query:$q,limit:$l}' 2>/dev/null) || exit 0; raw=$(gtmcp --compact call memory.recall \"$req\" 2>&1); rc=$?; if [ \"$rc\" -ne 0 ]; then printf '[autorecall] SessionStart recall failed (rc=%s): %s\\n' \"$rc\" \"$(printf '%s' \"$raw\" | tr '\\n' ' ' | cut -c1-200)\" >&2; exit 0; fi; [ -n \"$raw\" ] || exit 0; derr=$(printf '%s' \"$raw\" | jq -r '.error.message // empty' 2>/dev/null); if [ -n \"$derr\" ]; then printf '[autorecall] SessionStart recall denied: %s\\n' \"$derr\" >&2; exit 0; fi; inner=$(printf '%s' \"$raw\" | jq -r '(.content[0].text // empty)' 2>/dev/null); [ -n \"$inner\" ] || inner=\"$raw\"; md=$(printf '%s' \"$inner\" | jq -r '([(.memories // [])[] | \"=== \" + .name + \" [\" + .kind + \"] ===\\n\" + (.description // \"\") + \"\\n\\n\" + (.body // \"\")] | sort) as $m | if ($m | length) == 0 then \"\" else \"RECALLED MEMORY (auto-injected from prior work). Durable team memories below; treat any [feedback] item as a HARD operating rule.\\n\\n\" + ($m | join(\"\\n\\n\")) end' 2>/dev/null); [ -n \"$md\" ] && printf '%s' \"$md\" | jq -R -s '{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:.}}' 2>/dev/null; if [ -n \"$md\" ]; then names=$(printf '%s' \"$inner\" | jq -r '[(.memories // [])[].name] | join(\", \")' 2>/dev/null); [ -n \"$names\" ] && printf '[autorecall] SessionStart injected: %s\\n' \"$names\" >&2; fi; exit 0",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "if [ -n \"$GT_CHANNEL_ROOT\" ] && [ -n \"$GT_HOOK_BEAD\" ]; then d=\"$GT_CHANNEL_ROOT/merge-ready\"; mkdir -p \"$d\"; id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N); printf '{\"bead\":\"%s\",\"branch\":\"%s\"}' \"$GT_HOOK_BEAD\" \"${GT_BRANCH:-$GT_HOOK_BEAD}\" > \"$d/.$id.tmp\" && mv \"$d/.$id.tmp\" \"$d/$id.event\"; fi",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "if [ -n \"$GT_CHANNEL_ROOT\" ] && [ -n \"$GT_HOOK_ACCOUNT\" ] && command -v jq >/dev/null 2>&1; then ev=$(cat); tp=$(printf '%s' \"$ev\" | jq -r '.transcript_path // empty' 2>/dev/null); sid=$(printf '%s' \"$ev\" | jq -r '.session_id // empty' 2>/dev/null); if [ -n \"$tp\" ] && [ -f \"$tp\" ]; then off=\"${GT_HEARTBEAT_FILE:-/tmp/gt-qoff-$sid}.qoff\"; start=$(cat \"$off\" 2>/dev/null || echo 0); end=$(wc -l < \"$tp\" 2>/dev/null || echo 0); if [ \"$end\" -gt \"$start\" ]; then s=$(tail -n +$((start+1)) \"$tp\" | jq -sc '[.[]|select(.type==\"assistant\" and .message.usage!=null)]|group_by(.message.model)[]|{model:(.[0].message.model//\"unknown\"),input:([.[].message.usage.input_tokens//0]|add),output:([.[].message.usage.output_tokens//0]|add),cache_read:([.[].message.usage.cache_read_input_tokens//0]|add),cache_creation:([.[].message.usage.cache_creation_input_tokens//0]|add)}' 2>/dev/null); if [ -n \"$s\" ]; then d=\"$GT_CHANNEL_ROOT/quota-feed\"; mkdir -p \"$d\"; printf '%s\\n' \"$s\" | while IFS= read -r sm; do [ -n \"$sm\" ] || continue; id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N); printf '{\"account\":\"%s\",\"session\":\"%s\",\"sample\":%s}' \"$GT_HOOK_ACCOUNT\" \"${sid:-$GT_HOOK_ACCOUNT}\" \"$sm\" > \"$d/.$id.tmp\" && mv \"$d/.$id.tmp\" \"$d/$id.event\"; done; fi; printf '%s' \"$end\" > \"$off\"; fi; fi; fi",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "[ -n \"$GT_HEARTBEAT_FILE\" ] && { mkdir -p \"$(dirname \"$GT_HEARTBEAT_FILE\")\" 2>/dev/null; touch \"$GT_HEARTBEAT_FILE\" 2>/dev/null; } || true",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "case \"${GT_MEMORY_AUTORECALL_TURN:-}\" in 1|true|TRUE|on|ON|yes|YES) ;; *) exit 0 ;; esac; command -v gtmcp >/dev/null 2>&1 || exit 0; command -v jq >/dev/null 2>&1 || exit 0; ev=$(cat); if command -v jq >/dev/null 2>&1; then q=$(printf '%s' \"$ev\" | jq -r '.prompt // .user_input // empty' 2>/dev/null); else q=$(printf '%s' \"$ev\" | grep -oE '\"prompt\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' | head -n1 | sed -E 's/.*:[[:space:]]*\"([^\"]*)\"/\\1/'); fi; [ -n \"$q\" ] || exit 0; req=$(jq -nc --arg q \"$q\" '{query:$q,limit:3}' 2>/dev/null) || exit 0; raw=$(gtmcp --compact call memory.recall \"$req\" 2>&1); rc=$?; if [ \"$rc\" -ne 0 ]; then printf '[autorecall] turn recall failed (rc=%s): %s\\n' \"$rc\" \"$(printf '%s' \"$raw\" | tr '\\n' ' ' | cut -c1-200)\" >&2; exit 0; fi; [ -n \"$raw\" ] || exit 0; derr=$(printf '%s' \"$raw\" | jq -r '.error.message // empty' 2>/dev/null); if [ -n \"$derr\" ]; then printf '[autorecall] turn recall denied: %s\\n' \"$derr\" >&2; exit 0; fi; inner=$(printf '%s' \"$raw\" | jq -r '(.content[0].text // empty)' 2>/dev/null); [ -n \"$inner\" ] || inner=\"$raw\"; md=$(printf '%s' \"$inner\" | jq -r '([(.memories // [])[] | \"=== \" + .name + \" [\" + .kind + \"] ===\\n\" + (.description // \"\") + \"\\n\\n\" + (.body // \"\")] | sort) as $m | if ($m | length) == 0 then \"\" else \"RECALLED MEMORY (auto-injected for this turn). Durable team memories relevant to your prompt below; treat any [feedback] item as a HARD operating rule.\\n\\n\" + ($m | join(\"\\n\\n\")) end' 2>/dev/null); [ -n \"$md\" ] && printf '%s' \"$md\" | jq -R -s '{hookSpecificOutput:{hookEventName:\"UserPromptSubmit\",additionalContext:.}}' 2>/dev/null; exit 0",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ]
+  },
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "deny": [
+      "Write(**/memory/**.md)",
+      "Edit(**/memory/**.md)",
+      "MultiEdit(**/memory/**.md)"
+    ]
+  }
+}
