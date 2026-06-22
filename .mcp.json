@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "gt": {
+      "headers": {
+        "Authorization": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imd0LW1haW4ifQ.eyJzdWIiOiJndHByb3h5LWd0cHJveHktODViZGVhIiwid29ya3NwYWNlIjoiZGVmYXVsdCIsInNjb3BlcyI6WyJpc3N1ZXMucmVhZCIsImlzc3Vlcy53cml0ZSIsIm1lcmdlLndyaXRlIl0sImV4cCI6MTc4MTc1NDM4OSwiaWF0IjoxNzgxNzUwNzg5fQ.Ucp4bV5bPcRzQ5-0B7DfqfhOqbfYMxsPI0y3N91trst92XEm6TbCaDO5bvuvc5I1g6ayWy7AU8akxxFToSv3mIzOYHd3SUAdVE402F1wrz1iaEV4FN9Xl06gmJOp0qkGF3y46HG2ZCg1WB0tm8bjeNt6hDfX4g8wOzntNBDW5ptUC0YLWgBzGpTqL5Go8fNbM8xpzCv8VnqD5_jQMmU9PGd2jz472t8NjJA5quUWdImgDHBy2SqT7ddXKQgKBbzFEpLFUMvKd9azmWQ7gCH9VgwEPi8Qd2mUWlCWAGRv0D9ehiLmt_SDxIffeITs9pZ4RzvAJ8__dOsmJ0cG94dPug",
+        "X-Rig": "gtappproxy",
+        "X-Workspace": "default"
+      },
+      "type": "http",
+      "url": "http://gt-mcp-server:8765/mcp"
+    }
+  }
+}
