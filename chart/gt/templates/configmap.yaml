@@ -40,6 +40,8 @@ data:
 
   # --- Event log + graph output ---
   GT_EVENTLOG_ROOT: "/var/lib/gt-core"
+  # schedules/system config to the PVC (default with_file_name resolves to ephemeral /var/lib) — gtcore-8ff13e
+  GT_SYSTEM_CONFIG_PATH: "/var/lib/gt-core/system_config.json"
 
   # --- Auth / JWT (key bodies live in the Secret, mounted as files) ---
   GT_JWT_RS256_PRIVATE_KEY_FILE: "/run/secrets/jwt_private.pem"
