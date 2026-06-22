@@ -1,0 +1,231 @@
+{{- if .Values.deployReconciler.enabled -}}
+{{- $fullname := include "gt.fullname" . -}}
+{{- $orchd := .Values.deployReconciler.targets.orchd -}}
+{{- $mcp := .Values.deployReconciler.targets.mcpServer -}}
+{{- $orchdDeploy := printf "%s-%s" $fullname $orchd.deployment -}}
+{{- $mcpDeploy := printf "%s-%s" $fullname $mcp.deployment -}}
+# In-cluster, PULL-based deploy reconciler (gtproxy-50c890, closes gtcore-b45fc7).
+#
+# WHY: the previous deploy path was the GH-hosted `deploy` job in gt-core's
+# .github/workflows/deploy.yml running `kubectl set image` against the cluster's
+# kube-API over its Tailscale IP (100.76.199.82:6443) — an unstable hop that
+# failed the deploy job intermittently. Instead of hardening that fragile network
+# path, this CronJob moves the rollout INSIDE the cluster: it reconciles the
+# orchd + mcp-server Deployments to the HEAD of gt-core@main by talking to the
+# INTERNAL kube-API (https://kubernetes.default.svc + this pod's SA token), which
+# is always stable in-cluster — no Tailscale, no external kubeconfig.
+#
+# LOOP (every deployReconciler.schedule):
+#   1. Resolve target sha = HEAD of gt-core-labs/gt-core@main (git ls-remote).
+#   2. orchd  → codecsrayo/gt-core-orchd:sha-<7>
+#      mcp    → codecsrayo/gt-core-mcp-server:sha-embeddings-<7>
+#   3. If the deployment's current image != target AND the target tag EXISTS in
+#      Docker Hub (manifest HEAD; only a definitive 404 blocks — the ErrImagePull
+#      race where docker-publish hasn't pushed the embeddings tag yet), `kubectl
+#      set image` it. Otherwise no-op.
+#
+# IDEMPOTENT: re-running when already at target is a no-op. `kubectl set image`
+# patches ONLY the container image — it never touches resources, so the
+# mcp-server 6Gi memory limit (embeddings OOM fix) is preserved. RBAC is scoped
+# by resourceName to EXACTLY these two Deployments, so no other workload can be
+# touched.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-deployer
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deploy-reconciler
+# Do NOT broadly mount this SA's token; only the reconciler pod opts in
+# (automountServiceAccountToken: true on its podSpec). Every other workload in
+# this chart keeps automountServiceAccountToken: false.
+automountServiceAccountToken: false
+---
+# Minimal RBAC (feedback-rbac-grants-granular): get/patch ONLY the two target
+# Deployments by name — no wildcards, no list/watch, no other namespaces. This is
+# the least privilege that lets `kubectl get` (read current image) + `kubectl set
+# image` (patch) work. resourceNames restricts both verbs to these names; nothing
+# else in ns {{ .Release.Namespace }} is reachable with this token.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-deployer
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deploy-reconciler
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      - {{ $orchdDeploy }}
+      - {{ $mcpDeploy }}
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-deployer
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deploy-reconciler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-deployer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-deployer
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $fullname }}-deploy-reconciler
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deploy-reconciler
+spec:
+  schedule: {{ .Values.deployReconciler.schedule | quote }}
+  # Never let two reconcilers race a rollout; skip a tick if the prior run is
+  # still going (a slow rollout/ls-remote should not stack).
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: {{ .Values.deployReconciler.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.deployReconciler.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # Hard ceiling so a wedged ls-remote/registry call can't run forever; the
+      # next schedule tick reconciles anyway (idempotent).
+      activeDeadlineSeconds: {{ .Values.deployReconciler.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "gt.selectorLabels" (dict "root" . "component" "deploy-reconciler") | nindent 12 }}
+        spec:
+          serviceAccountName: {{ $fullname }}-deployer
+          # This is the ONE pod in the chart that talks to the kube-API, so it
+          # opts INTO the SA-token mount (every other workload sets this false).
+          automountServiceAccountToken: true
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- include "gt.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: reconciler
+              image: "{{ .Values.deployReconciler.image.repository }}:{{ .Values.deployReconciler.image.tag }}"
+              imagePullPolicy: {{ .Values.deployReconciler.image.pullPolicy }}
+              env:
+                - name: GIT_REPO_SLUG
+                  value: {{ .Values.deployReconciler.git.repoSlug | quote }}
+                - name: GIT_BRANCH
+                  value: {{ .Values.deployReconciler.git.branch | quote }}
+                - name: REG_HOST
+                  value: {{ .Values.deployReconciler.registry.host | quote }}
+                - name: REG_AUTH_HOST
+                  value: {{ .Values.deployReconciler.registry.authHost | quote }}
+                - name: ORCHD_DEPLOY
+                  value: {{ $orchdDeploy | quote }}
+                - name: ORCHD_CONTAINER
+                  value: {{ $orchd.container | quote }}
+                - name: ORCHD_IMAGE
+                  value: {{ $orchd.image | quote }}
+                - name: ORCHD_TAG_PREFIX
+                  value: {{ $orchd.tagPrefix | quote }}
+                - name: MCP_DEPLOY
+                  value: {{ $mcpDeploy | quote }}
+                - name: MCP_CONTAINER
+                  value: {{ $mcp.container | quote }}
+                - name: MCP_IMAGE
+                  value: {{ $mcp.image | quote }}
+                - name: MCP_TAG_PREFIX
+                  value: {{ $mcp.tagPrefix | quote }}
+                {{- if .Values.deployReconciler.git.useRigToken }}
+                # gt-core is currently public (ls-remote works anonymously); this
+                # token is a belt-and-braces fallback if the rig ever goes private.
+                # Reuses the orchd rig clone token already in the chart Secret.
+                - name: GT_RIG_GIT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "gt.secretName" . }}
+                      key: GT_RIG_GIT_TOKEN
+                {{- end }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -u
+
+                  # --- 1. resolve target sha = HEAD of $GIT_BRANCH ----------------
+                  if [ -n "${GT_RIG_GIT_TOKEN:-}" ]; then
+                    REMOTE="https://x-access-token:${GT_RIG_GIT_TOKEN}@github.com/${GIT_REPO_SLUG}.git"
+                  else
+                    REMOTE="https://github.com/${GIT_REPO_SLUG}.git"
+                  fi
+                  SHA=$(git ls-remote "$REMOTE" "refs/heads/${GIT_BRANCH}" 2>/dev/null | awk 'NR==1{print $1}')
+                  if [ -z "$SHA" ]; then
+                    echo "[reconciler] FATAL: could not resolve ${GIT_REPO_SLUG}@${GIT_BRANCH} HEAD"
+                    exit 1
+                  fi
+                  S7=$(printf '%s' "$SHA" | cut -c1-7)
+                  echo "[reconciler] ${GIT_REPO_SLUG}@${GIT_BRANCH} HEAD = ${SHA} (${S7})"
+
+                  rc=0
+
+                  # --- registry existence gate: only a definitive 404 blocks -----
+                  # (the ErrImagePull race: docker-publish may not have pushed the
+                  # tag yet). Echoes the manifest HEAD status; 000 when the token
+                  # or request could not be made (auth-quirk/network) — those are
+                  # treated as "unknown ⇒ proceed" so we never wedge, and let the
+                  # kubelet backoff absorb a transient miss.
+                  reg_code() {
+                    _repo="$1"; _tag="$2"
+                    _tok=$(curl -fsS "https://${REG_AUTH_HOST}/token?service=registry.docker.io&scope=repository:${_repo}:pull" 2>/dev/null | jq -r '.token // empty' 2>/dev/null)
+                    [ -n "$_tok" ] || { echo "000"; return; }
+                    curl -sS -o /dev/null -w '%{http_code}' -I \
+                      -H "Authorization: Bearer ${_tok}" \
+                      -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+                      -H "Accept: application/vnd.oci.image.index.v1+json" \
+                      -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+                      "https://${REG_HOST}/v2/${_repo}/manifests/${_tag}" 2>/dev/null || echo "000"
+                  }
+
+                  reconcile() {
+                    _deploy="$1"; _container="$2"; _image="$3"; _prefix="$4"
+                    _target="${_image}:${_prefix}${S7}"
+                    _cur=$(kubectl get deploy "$_deploy" \
+                      -o jsonpath="{.spec.template.spec.containers[?(@.name=='${_container}')].image}" 2>/dev/null)
+                    if [ -z "$_cur" ]; then
+                      echo "[${_deploy}] ERROR: could not read current image (rbac? missing deploy?)"
+                      rc=1; return
+                    fi
+                    if [ "$_cur" = "$_target" ]; then
+                      echo "[${_deploy}] already at ${_target} — no-op"
+                      return
+                    fi
+                    _code=$(reg_code "$_image" "${_prefix}${S7}")
+                    if [ "$_code" = "404" ]; then
+                      echo "[${_deploy}] target ${_target} NOT in registry yet (404) — skip this tick"
+                      return
+                    fi
+                    echo "[${_deploy}] ${_cur} -> ${_target} (registry ${_code})"
+                    if kubectl set image "deploy/${_deploy}" "${_container}=${_target}"; then
+                      echo "[${_deploy}] set image OK"
+                    else
+                      echo "[${_deploy}] set image FAILED"
+                      rc=1
+                    fi
+                  }
+
+                  # --- 2/3. reconcile each target --------------------------------
+                  reconcile "$ORCHD_DEPLOY" "$ORCHD_CONTAINER" "$ORCHD_IMAGE" "$ORCHD_TAG_PREFIX"
+                  reconcile "$MCP_DEPLOY"  "$MCP_CONTAINER"  "$MCP_IMAGE"  "$MCP_TAG_PREFIX"
+
+                  echo "[reconciler] done (rc=${rc})"
+                  exit "$rc"
+              resources:
+                {{- toYaml .Values.deployReconciler.resources | nindent 16 }}
+{{- end -}}

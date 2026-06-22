@@ -302,6 +302,37 @@ polecat mid-task. A **preStop checkpoint-push** WIP-commits + pushes each
 work is never lost across a redeploy. See
 [Appendix — graceful redeploy drain](#appendix--graceful-redeploy-drain-orchd).
 
+**In-cluster deploy reconciler (gtproxy-50c890, closes gtcore-b45fc7).** The old
+deploy path — gt-core's GH-hosted `deploy` job running `kubectl set image` against
+the cluster kube-API over its **Tailscale IP** (`100.76.199.82:6443`) — failed
+intermittently when that hop was unstable. Rather than harden the fragile network
+path, the chart ships a **pull-based CronJob** (`gt-deploy-reconciler`,
+`deployReconciler.enabled`, default every 4 min) that rolls the deploy from
+*inside* the cluster against the **internal** kube-API
+(`https://kubernetes.default.svc` + its own SA token) — always stable in-cluster,
+no Tailscale, no external kubeconfig. Each tick it:
+
+1. resolves the target sha = HEAD of `gt-core-labs/gt-core@main` (`git ls-remote`);
+2. computes `codecsrayo/gt-core-orchd:sha-<7>` (orchd) and
+   `codecsrayo/gt-core-mcp-server:sha-embeddings-<7>` (mcp-server);
+3. if a Deployment's current image differs **and** the target tag exists in Docker
+   Hub (manifest `HEAD`; only a definitive `404` blocks — the ErrImagePull race
+   where `docker-publish` hasn't pushed the embeddings tag yet), `kubectl set
+   image`s it; otherwise no-op.
+
+It is **idempotent** (already-at-target ⇒ no-op), **image-only** (`set image`
+never touches `resources`, so the mcp-server **6Gi** limit survives), and its
+RBAC is a `Role` scoped by `resourceName` to **exactly** `gt-orchd` +
+`gt-mcp-server` (`get`/`patch`, no wildcards, no `list`/`watch`) bound to a
+dedicated `gt-deployer` ServiceAccount — the only pod in the chart that mounts an
+SA token. Inspect runs with `kubectl -n gt get cronjob gt-deploy-reconciler` and
+`kubectl -n gt logs job/<gt-deploy-reconciler-...>`.
+
+> **Follow-up (gt-core repo, not this chart):** retire / no-op the now-superseded
+> `deploy` job in gt-core's `.github/workflows/deploy.yml` — `docker-publish`
+> still builds the images, but the rollout is now this reconciler. Tracked
+> separately because it lives in a different repo.
+
 ---
 
 ## Step 5 — Data migration (prod → cluster)  *(migration path only)*
