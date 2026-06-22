@@ -46,17 +46,20 @@ mcpServer:
   api:
     replicas: 2
     # Memory sizing — incidente 2026-06-17: the :embeddings image loads embedding
-    # models at boot, so 2Gi limit → OOMKilled (exitCode 137) crash-loop that left
-    # the MCP intermittently unservable ('no available server'). Live fix was
-    # `kubectl set resources --limits=memory=4Gi --requests=memory=1Gi`; pinned
-    # here so a helm upgrade no longer reverts to 2Gi. Node has 32Gi (~15% used),
-    # plenty of headroom (orchd already caps at 8Gi). See DEPLOY.md.
+    # models at boot, so a 2Gi limit → OOMKilled (exitCode 137) crash-loop that
+    # left the MCP intermittently unservable ('no available server'). First raised
+    # to 4Gi; embeddings kept OOMing at 4Gi too (exit137 persist), so the live fix
+    # was bumped again: `kubectl set resources --limits=memory=6Gi --requests=
+    # memory=1Gi`. Pinned at 6Gi here so a helm upgrade never reverts it. Node has
+    # 32Gi (~15% used), plenty of headroom (orchd already caps at 8Gi). The
+    # deploy-reconciler (gtproxy-50c890) only `kubectl set image`s, so it never
+    # touches this limit. See DEPLOY.md.
     resources:
       requests:
         cpu: 250m
         memory: 1Gi
       limits:
-        memory: 4Gi
+        memory: 6Gi
     # maxUnavailable 0 → never drop below desired during a rollout.
     rollingUpdate:
       maxUnavailable: 0
@@ -334,6 +337,69 @@ ingress:
 # ---------------------------------------------------------------------------
 seed:
   enabled: true
+
+# ---------------------------------------------------------------------------
+# In-cluster deploy reconciler (gtproxy-50c890, closes gtcore-b45fc7).
+#
+# A pull-based CronJob that rolls the orchd + mcp-server Deployments to the HEAD
+# of gt-core@main by talking to the INTERNAL kube-API (kubernetes.default.svc +
+# its own SA token) — replacing the GH-hosted `deploy` job that reached the
+# kube-API over a flaky Tailscale IP. Every tick it resolves the target sha
+# (git ls-remote), and if a Deployment's image differs AND the target tag exists
+# in Docker Hub (manifest HEAD; only a 404 blocks — the ErrImagePull race), it
+# `kubectl set image`s. Idempotent; image-only patch (never touches resources, so
+# the mcp-server 6Gi limit is safe); RBAC scoped by resourceName to exactly the
+# two Deployments. See chart/gt/templates/deploy-reconciler.yaml + DEPLOY.md.
+deployReconciler:
+  enabled: true
+  # Reconcile cadence. ~4 min keeps a merged main live within a few minutes
+  # (acceptance: pods at the merge sha in ≤ unos minutos, no manual step).
+  schedule: "*/4 * * * *"
+  image:
+    # Bundles kubectl + git + curl + jq (everything the reconcile script needs).
+    repository: alpine/k8s
+    tag: "1.31.2"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  # Keep a few runs for `kubectl get jobs`/log inspection without unbounded churn.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # Hard ceiling per run so a wedged ls-remote/registry call can't run forever;
+  # the next tick reconciles anyway (idempotent).
+  activeDeadlineSeconds: 300
+  git:
+    # Source of truth for the target sha (HEAD of branch).
+    repoSlug: gt-core-labs/gt-core
+    branch: main
+    # gt-core is currently public so `git ls-remote` works anonymously; mounting
+    # the orchd rig clone token (Secret key GT_RIG_GIT_TOKEN) is a belt-and-braces
+    # fallback if the repo ever goes private. Set false to force anonymous.
+    useRigToken: true
+  registry:
+    # Docker Hub registry + token endpoints for the manifest-HEAD existence gate.
+    host: registry-1.docker.io
+    authHost: auth.docker.io
+  # The two Deployments this reconciler owns. `deployment` is the suffix appended
+  # to the chart fullname (⇒ gt-orchd / gt-mcp-server); it must match the
+  # Deployment names AND drives the RBAC resourceNames. Image scheme per the
+  # gt-core docker-publish workflow: orchd = the lean :sha-<7> tag, mcp-server =
+  # the heavier embeddings variant :sha-embeddings-<7> that the cluster runs.
+  targets:
+    orchd:
+      deployment: orchd
+      container: orchd
+      image: codecsrayo/gt-core-orchd
+      tagPrefix: "sha-"
+    mcpServer:
+      deployment: mcp-server
+      container: mcp-server
+      image: codecsrayo/gt-core-mcp-server
+      tagPrefix: "sha-embeddings-"
 
 # ---------------------------------------------------------------------------
 # Real email send/receive (epic hq-9c199d; provider: Resend). When enabled the

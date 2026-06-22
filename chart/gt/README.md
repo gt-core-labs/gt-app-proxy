@@ -49,6 +49,7 @@ helm install gt chart/gt -f values-secret.yaml \
 | `gt-orch-server` (orchd profile) | **Deployment** (singleton, `replicas=1`, `Recreate`) + rig/worktree PVCs |
 | `gt-web`               | **Deployment** + **Service**                               |
 | `gt-docs`              | **Deployment** + **Service**                               |
+| `gt-deploy-reconciler` | **CronJob** + dedicated `gt-deployer` **ServiceAccount**/`Role`/`RoleBinding` — pull-based in-cluster rollout (`deployReconciler.*`, gtproxy-50c890) |
 | `watchtower`           | **removed** — replaced by GitOps + immutable tags          |
 | named volumes          | PVCs (`*-eventlog`, `*-graph`, `*-orchd-rig*`, per-StatefulSet data) |
 
