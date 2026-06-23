@@ -402,6 +402,52 @@ deployReconciler:
       tagPrefix: "sha-embeddings-"
 
 # ---------------------------------------------------------------------------
+# In-cluster deploy reconciler for gt-web — a SEPARATE instance from
+# deployReconciler (which owns gt-core's orchd + mcp-server). gt-web is a
+# DIFFERENT repo with its own HEAD sha, so it needs its own ls-remote source;
+# the rest of the machinery (registry existence gate, in-cluster kube-API
+# rollout, granular resourceName RBAC) is identical. WHY this exists: gt-web's
+# GH-hosted .github/workflows/deploy.yml hit the same flaky Tailscale hop
+# (100.76.199.82:6443) that pushed gt-core to in-cluster reconciliation
+# (gtproxy-50c890). One target only — gt-web runs the same lean :sha-<7> image
+# in BOTH envs (no embeddings split), so no per-env override is needed.
+# ---------------------------------------------------------------------------
+webReconciler:
+  enabled: true
+  schedule: "*/4 * * * *"
+  image:
+    repository: alpine/k8s
+    tag: "1.31.2"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  activeDeadlineSeconds: 300
+  git:
+    # Source of truth for the target sha (HEAD of gt-web@main).
+    repoSlug: gt-core-labs/gt-web
+    branch: main
+    # Reuse the orchd rig clone token (Secret key GT_RIG_GIT_TOKEN, already
+    # covers the gtweb rig) — belt-and-braces if gt-web ever goes private.
+    useRigToken: true
+  registry:
+    host: registry-1.docker.io
+    authHost: auth.docker.io
+  # The single Deployment this reconciler owns. `deployment` is the suffix
+  # appended to the chart fullname (⇒ gt-web in ns gt, gt-prod-web in ns
+  # gt-prod); it must match the Deployment name AND drives the RBAC resourceName.
+  target:
+    deployment: web
+    container: web
+    image: codecsrayo/gt-web
+    tagPrefix: "sha-"
+
+# ---------------------------------------------------------------------------
 # Real email send/receive (epic hq-9c199d; provider: Resend). When enabled the
 # API pods get GT_EMAIL_TRANSPORT=smtp (outbox drain delivers via lettre) and
 # GT_INBOUND_MAIL_DIR (mounts an emptyDir; the inbound webhook at
