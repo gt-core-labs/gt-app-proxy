@@ -204,6 +204,14 @@ daemons:
   # agent_list/audit). Set to false to revert to DIRECT mode (safe rollback).
   # See gtcore-cf78a1 and the runbook §Orchd dispatch mode.
   dispatchViaMayor: true
+  # Role-agents mode (GT_ROLE_AGENTS). When true, sheriff/witness/deacon run as
+  # single-shot agent sessions (tmux, agent.spawned/session-end → agent_list/audit)
+  # instead of invisible in-process loops. Each fires on its trigger: sheriff ←
+  # merge.failed/ready, witness ← issues.closed, deacon ← health tick. The legacy
+  # in-process loops are disabled when the flag is on (no double execution).
+  # Trade-off: each trigger dispatch costs a token budget vs ~0 for in-process loops.
+  # Set to false to revert to legacy in-process mode. See gtcore-5d29f4.
+  roleAgents: true
   # Operator notification address for merge-failure emails (GT_NOTIFY_EMAIL).
   # The merge daemon runs on THIS singleton; when a merge.failed event needs the
   # operator (e.g. gh auth wiped by a redeploy — gtcore-4c9c85, or quota fully

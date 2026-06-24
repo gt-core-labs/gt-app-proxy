@@ -293,6 +293,33 @@ helm upgrade gt-platform chart/gt \
   --set daemons.dispatchViaMayor=false
 ```
 
+### Role-agents — sheriff / witness / deacon as observable sessions (gtcore-5d29f4)
+
+Controls `daemons.roleAgents` (`GT_ROLE_AGENTS`):
+
+| Mode | Flag | Behaviour |
+| --- | --- | --- |
+| **Legacy** | `false` | sheriff/witness/deacon run as in-process loops (invisible — not in `agent_list`). |
+| **Agent** | `true` (default) | Each fires as a single-shot tmux session on its trigger: sheriff ← `merge.failed/ready`, witness ← `issues.closed`, deacon ← health tick. Emits `agent.spawned / session-end → agent_list / audit`. Legacy loops are disabled (no double execution). |
+
+**Trade-off:** each trigger dispatch spends a small token budget (vs ~0 for in-process loops). Acceptable given the observability gain.
+
+**Verify role-agents active:**
+
+```sh
+# Trigger a merge.failed or wait for a deacon health tick; the session should appear.
+kubectl -n gt logs deploy/gt-gt-orchd | grep -iE "sheriff|witness|deacon"
+# Via MCP: mcp__gt__agent_list → expect sheriff-<rig> / witness-<rig> / deacon entries
+```
+
+**Rollback to legacy:**
+
+```sh
+helm upgrade gt-platform chart/gt \
+  -n gt -f values-secret.yaml \
+  --set daemons.roleAgents=false
+```
+
 ---
 
 ## Step 4 — Stateful services + verify PVCs
