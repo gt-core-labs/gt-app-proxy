@@ -139,6 +139,14 @@ spec:
             - name: GT_NOTIFY_EMAIL
               value: {{ .Values.daemons.notifyEmail | quote }}
             {{- end }}
+            {{- if .Values.daemons.dispatchViaMayor }}
+            # MAYOR dispatch mode (gtcore-cf78a1): the scheduler wakes one mayor
+            # per rig with the ready frontier instead of slinging polecats directly.
+            # The mayor coordinates bead-by-bead and announces itself as a session.
+            # Unset (or daemons.dispatchViaMayor=false) reverts to DIRECT mode.
+            - name: GT_DISPATCH_VIA_MAYOR
+              value: "1"
+            {{- end }}
             {{- if .Values.email.enabled }}
             # SMTP transport for the outbox drain. The non-secret half (transport/
             # url/user/from) rides the shared ConfigMap (envFrom); the API key is a

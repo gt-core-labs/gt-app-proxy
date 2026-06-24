@@ -262,6 +262,37 @@ Notes:
   kubectl -n gt logs deploy/gt-gt-orchd | grep -iE "email_outbox|notify"   # enqueue + drain
   ```
 
+### Orchd dispatch mode — DIRECT vs MAYOR (gtcore-cf78a1)
+
+The orchd scheduler has two modes, controlled by `daemons.dispatchViaMayor`
+(`GT_DISPATCH_VIA_MAYOR`):
+
+| Mode | Flag | Behaviour |
+| --- | --- | --- |
+| **DIRECT** | `false` (legacy) | `FrontierSource → SchedWorker` slings polecats directly. The mayor is bypassed and not visible in `agent_list`. |
+| **MAYOR** | `true` (default) | The scheduler wakes one `mayor-<rig>` session per rig with the ready frontier. The mayor coordinates bead-by-bead dispatch and announces itself as an observable session (`agent.spawned / session-end → agent_list / audit`). |
+
+**Default is MAYOR** (`daemons.dispatchViaMayor: true` in `values.yaml`).
+A `helm upgrade` with `--set daemons.dispatchViaMayor=false` reverts to DIRECT
+safely (no state loss — polecats sling from the orchd directly again).
+
+**Verify MAYOR mode is active:**
+
+```sh
+# Mayor session should appear in agent_list shortly after the orchd boots
+# and a ready+auto bead exists.
+kubectl -n gt logs deploy/gt-gt-orchd | grep -i "mayor"       # waker fires
+# Via MCP: mcp__gt__agent_list → expect a mayor-<rig> entry
+```
+
+**Rollback to DIRECT:**
+
+```sh
+helm upgrade gt-platform chart/gt \
+  -n gt -f values-secret.yaml \
+  --set daemons.dispatchViaMayor=false
+```
+
 ---
 
 ## Step 4 — Stateful services + verify PVCs
