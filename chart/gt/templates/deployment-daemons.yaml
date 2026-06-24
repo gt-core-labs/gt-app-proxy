@@ -130,6 +130,13 @@ spec:
             - name: GT_CI_GATED_MERGE
               value: "1"
             {{- end }}
+            {{- if .Values.daemons.roleAgents }}
+            # Role-agents mode (gtcore-5d29f4): sheriff/witness/deacon run as
+            # single-shot agent sessions instead of invisible in-process loops.
+            # The legacy loops are disabled when this flag is on.
+            - name: GT_ROLE_AGENTS
+              value: "1"
+            {{- end }}
             {{- if .Values.daemons.notifyEmail }}
             # Merge-failure operator email (gtproxy-85bdea). The merge daemon +
             # the outbox drain BOTH run on this singleton; with this set the boot
