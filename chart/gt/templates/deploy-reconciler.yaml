@@ -207,8 +207,8 @@ spec:
                       return
                     fi
                     _code=$(reg_code "$_image" "${_prefix}${S7}")
-                    if [ "$_code" = "404" ]; then
-                      echo "[${_deploy}] target ${_target} NOT in registry yet (404) — skip this tick"
+                    if [ "$_code" != "200" ]; then
+                      echo "[${_deploy}] target ${_target} not confirmed in registry (code=${_code}) — skip this tick"
                       return
                     fi
                     echo "[${_deploy}] ${_cur} -> ${_target} (registry ${_code})"
