@@ -161,9 +161,11 @@ spec:
 
                   rc=0
 
-                  # --- registry gate: only HTTP 200 allows deployment ---------------
-                  # 404 = tag not published yet (docker-publish race); 000 = auth/
-                  # network error. Both skip this tick — never deploy unconfirmed.
+                  # --- registry gate: only a definitive 404 blocks deployment -------
+                  # 404 = tag not published yet (docker-publish race) → skip.
+                  # 000/401/5xx = auth/network error → proceed; the kubelet
+                  # ImagePull backoff absorbs a transient miss. This avoids the
+                  # reconciler wedging indefinitely when Docker Hub token-fetch is flaky.
                   reg_code() {
                     _repo="$1"; _tag="$2"
                     _tok=$(curl -fsS "https://${REG_AUTH_HOST}/token?service=registry.docker.io&scope=repository:${_repo}:pull" 2>/dev/null | jq -r '.token // empty' 2>/dev/null)
@@ -190,11 +192,11 @@ spec:
                       return
                     fi
                     _code=$(reg_code "$_image" "${_prefix}${S7}")
-                    if [ "$_code" != "200" ]; then
-                      echo "[${_deploy}] target ${_target} not confirmed in registry (code=${_code}) — skip this tick"
+                    if [ "$_code" = "404" ]; then
+                      echo "[${_deploy}] target ${_target} not published yet (404) — skip this tick"
                       return
                     fi
-                    echo "[${_deploy}] ${_cur} -> ${_target} (registry ${_code})"
+                    echo "[${_deploy}] ${_cur} -> ${_target} (registry ${_code} — proceed; kubelet backoff absorbs a transient miss)"
                     if kubectl set image "deploy/${_deploy}" "${_container}=${_target}"; then
                       echo "[${_deploy}] set image OK"
                     else
