@@ -344,6 +344,25 @@ ingress:
   annotations: {}
 
 # ---------------------------------------------------------------------------
+# Security headers (gtproxy-21ba70) — a Traefik `headers` Middleware attached to
+# the Ingress above. Standard set only; CSP is deferred (report-only first) so it
+# does not break the SSR frontends/MCP. Disable by setting enabled: false.
+# ---------------------------------------------------------------------------
+securityHeaders:
+  enabled: true
+  # HSTS — 1 year. Traefik only emits Strict-Transport-Security over HTTPS.
+  stsSeconds: 31536000
+  stsIncludeSubdomains: true
+  # Leave preload off until the apex domain is ready to commit to the preload list.
+  stsPreload: false
+  contentTypeNosniff: true
+  frameDeny: true
+  referrerPolicy: strict-origin-when-cross-origin
+  # Headers Traefik has no first-class field for go here verbatim.
+  customResponseHeaders:
+    Permissions-Policy: "camera=(), microphone=(), geolocation=()"
+
+# ---------------------------------------------------------------------------
 # Seed Job (bead — post-install/upgrade hook): a pure pre-roll readiness gate that
 # waits for Dolt + Postgres before the API pods boot. Schema bootstrap AND the live
 # seeds (knowledge/role-skills catalog, IdP/OAuth providers, rig catalog) run at API

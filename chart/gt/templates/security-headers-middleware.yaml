@@ -1,0 +1,32 @@
+{{- if .Values.securityHeaders.enabled -}}
+{{- $fullname := include "gt.fullname" . -}}
+# Security-headers middleware (gtproxy-21ba70) — a Traefik `headers` middleware
+# that stamps the standard response security headers on every route served by
+# the Ingress below. Referenced from the Ingress via the
+# `traefik.ingress.kubernetes.io/router.middlewares` annotation, which Traefik
+# resolves as `<namespace>-<name>@kubernetescrd`.
+#
+# CSP is intentionally NOT set here: a strict policy breaks the gt-web/gt-docs
+# SSR frontends and the MCP surface until tuned. Ship it later report-only first.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $fullname }}-security-headers
+  labels:
+    {{- include "gt.labels" . | nindent 4 }}
+spec:
+  headers:
+    # HSTS — only emitted over HTTPS by Traefik.
+    stsSeconds: {{ .Values.securityHeaders.stsSeconds | int64 }}
+    stsIncludeSubdomains: {{ .Values.securityHeaders.stsIncludeSubdomains }}
+    stsPreload: {{ .Values.securityHeaders.stsPreload }}
+    # X-Content-Type-Options: nosniff
+    contentTypeNosniff: {{ .Values.securityHeaders.contentTypeNosniff }}
+    # X-Frame-Options: DENY
+    frameDeny: {{ .Values.securityHeaders.frameDeny }}
+    referrerPolicy: {{ .Values.securityHeaders.referrerPolicy | quote }}
+    {{- with .Values.securityHeaders.customResponseHeaders }}
+    customResponseHeaders:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end -}}

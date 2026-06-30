@@ -183,6 +183,29 @@ The post-install hooks create the MinIO bucket + gate on the stores; the API
 rolls only once its pods pass `/health` (schema + live seeds run at API boot —
 see [Step 6](#step-6--seeds)).
 
+### Security headers (Traefik middleware)
+
+The chart ships a Traefik `headers` Middleware (`securityHeaders` in
+`values.yaml`, on by default) and attaches it to the Ingress via the
+`traefik.ingress.kubernetes.io/router.middlewares` annotation, stamping HSTS,
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`
+and a restrictive `Permissions-Policy` on every public route. CSP is
+intentionally omitted for now (it breaks the SSR frontends/MCP until tuned —
+ship it report-only first). Disable with `--set securityHeaders.enabled=false`.
+
+The in-cluster deploy-reconciler only bumps image tags, so a chart change like
+this needs a manual re-apply per namespace:
+
+```sh
+# prod (ns gt-prod) and dev (ns gt)
+helm template gt-prod chart/gt -n gt-prod -f values-secret-prod.yaml -f <talos>/dev/prod-values.yaml \
+  | kubectl apply -n gt-prod -f -
+helm template gt        chart/gt -n gt      -f values-secret.yaml      -f <talos>/dev/dev-values.yaml \
+  | kubectl apply -n gt -f -
+```
+
+Verify: `curl -sI https://gt.codecsrayo.com | grep -i 'strict-transport\|x-frame\|x-content\|referrer\|permissions'`.
+
 ---
 
 ## Step 3 — Secrets → k8s Secret
