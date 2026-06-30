@@ -18,6 +18,11 @@ metadata:
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+    {{- if .Values.securityHeaders.enabled }}
+    # Attach the security-headers middleware (gtproxy-21ba70). Traefik resolves a
+    # kubernetesCRD middleware reference as `<namespace>-<name>@kubernetescrd`.
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-{{ $fullname }}-security-headers@kubernetescrd
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   {{- if .Values.ingress.tls.enabled }}
