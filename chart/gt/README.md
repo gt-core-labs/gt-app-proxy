@@ -56,8 +56,13 @@ helm install gt chart/gt -f values-secret.yaml \
 Ingress path routing (compose Traefik priorities → longest-prefix Ingress):
 
 - `/auth /api /mcp /stream /openapi.json /health /.well-known` → `mcp-server:8765` (was priority 100)
+- `/app` → `gt-web:3000` (console, was priority 60)
 - `/docs /share` → `gt-docs:3000` (was priority 50)
-- `/` → `gt-web:3000` (catch-all, was priority 1)
+- `/` → `gt-docs:3000` (documentation site catch-all, was priority 1)
+
+The documentation site owns the site root `/` (and `/es`); the gt-web console
+moved under `/app` (SvelteKit `paths.base=/app`). No path rewrite — the `/app`
+prefix reaches gt-web intact.
 
 ## API vs daemon split (bead .4)
 

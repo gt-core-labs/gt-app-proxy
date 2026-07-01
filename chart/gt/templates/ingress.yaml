@@ -1,11 +1,15 @@
 {{- if .Values.ingress.enabled -}}
 {{- $fullname := include "gt.fullname" . -}}
 # Ingress (bead .2) — mirrors the compose Traefik path routing:
-#   API surfaces  → mcp-server:8765  (compose router `gt`,    priority 100)
-#   /docs /share  → gt-docs:3000     (compose router `gtdocs`, priority 50)
-#   /             → gt-web:3000       (compose router `gtweb`,  priority 1, catch-all)
-# A standard Ingress resolves by LONGEST-PREFIX match, so the explicit API/docs
-# paths win over the `/` catch-all without explicit priorities. TLS via
+#   API surfaces  → mcp-server:8765  (compose router `gt`,     priority 100)
+#   /app          → gt-web:3000       (compose router `gtweb`,  priority 60, console)
+#   /docs /share  → gt-docs:3000      (compose router `gtdocs`, priority 50)
+#   /             → gt-docs:3000       (compose router `gtroot`, priority 1, catch-all)
+# The documentation site (gt-docs) owns the site root `/`; the gt-web console
+# moved under `/app` (SvelteKit `paths.base=/app`). A standard Ingress resolves
+# by LONGEST-PREFIX match, so the explicit API/app/docs paths win over the `/`
+# catch-all without explicit priorities. NOTE: no path rewrite/StripPrefix — gt-web
+# serves itself under `/app`, so the prefix must reach it intact. TLS via
 # cert-manager (the compose ACME-DNS-01-via-Netlify resolver has no k8s analogue;
 # wire a clusterIssuer in annotations for prod).
 apiVersion: networking.k8s.io/v1
@@ -45,6 +49,14 @@ spec:
                 port:
                   number: 8765
           {{- end }}
+          # --- /app → gt-web console (compose priority 60) ---
+          - path: /app
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-web
+                port:
+                  number: {{ .Values.web.port }}
           # --- /docs + /share → gt-docs (compose priority 50) ---
           {{- range $p := list "/docs" "/share" }}
           - path: {{ $p }}
@@ -55,12 +67,12 @@ spec:
                 port:
                   number: {{ $.Values.docs.port }}
           {{- end }}
-          # --- catch-all → gt-web (compose priority 1) ---
+          # --- catch-all → gt-docs documentation site (compose priority 1) ---
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ $fullname }}-web
+                name: {{ $fullname }}-docs
                 port:
-                  number: {{ .Values.web.port }}
+                  number: {{ .Values.docs.port }}
 {{- end -}}

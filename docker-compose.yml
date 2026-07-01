@@ -289,9 +289,11 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=proyectos-bi-quare
-      # Catch-all for the host: lowest priority, so the backend path rules win.
-      - traefik.http.routers.gtweb.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`)
-      - traefik.http.routers.gtweb.priority=1
+      # The console lives under /app (SvelteKit paths.base=/app). Priority 60:
+      # ABOVE the gt-docs /docs+/share (50) and the root catch-all (1), BELOW the
+      # backend API rules (100). No StripPrefix — gt-web serves itself at /app.
+      - traefik.http.routers.gtweb.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`) && PathPrefix(`/app`)
+      - traefik.http.routers.gtweb.priority=60
       - traefik.http.routers.gtweb.entrypoints=websecure
       - traefik.http.routers.gtweb.tls=true
       - traefik.http.routers.gtweb.tls.certresolver=netlify
@@ -329,7 +331,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=proyectos-bi-quare
-      # /docs + /share → gt-docs. Priority 50: ABOVE gt-web's catch-all (1), BELOW
+      # /docs + /share → gt-docs. Priority 50: ABOVE the root catch-all (1), BELOW
       # the backend API rules (100), so /api etc. still win.
       - traefik.http.routers.gtdocs.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`) && (PathPrefix(`/docs`) || PathPrefix(`/share`))
       - traefik.http.routers.gtdocs.priority=50
@@ -337,6 +339,14 @@ services:
       - traefik.http.routers.gtdocs.tls=true
       - traefik.http.routers.gtdocs.tls.certresolver=netlify
       - traefik.http.services.gtdocs.loadbalancer.server.port=3000
+      # Root catch-all → the documentation site (also gt-docs). Priority 1: the
+      # lowest, so every explicit path rule above wins. gt-docs owns `/` and `/es`.
+      - traefik.http.routers.gtroot.rule=Host(`${GT_DOMAIN:-gt.codecsrayo.com}`)
+      - traefik.http.routers.gtroot.priority=1
+      - traefik.http.routers.gtroot.entrypoints=websecure
+      - traefik.http.routers.gtroot.tls=true
+      - traefik.http.routers.gtroot.tls.certresolver=netlify
+      - traefik.http.routers.gtroot.service=gtdocs
       # Reuse gt-web's watchtower scope so the existing watchtower auto-updates it
       # once the image is published to DockerHub (and pull_policy flips to always).
       - com.centurylinklabs.watchtower.scope=gt-web
