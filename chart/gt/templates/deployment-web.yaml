@@ -54,13 +54,13 @@ spec:
                 command: ["sleep", "8"]
           readinessProbe:
             httpGet:
-              path: /
+              path: /app/login
               port: {{ .Values.web.port }}
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /app/login
               port: {{ .Values.web.port }}
             initialDelaySeconds: 30
             periodSeconds: 20
